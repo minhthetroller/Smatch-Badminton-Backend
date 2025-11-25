@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  extensions = [uuid_ossp(map: "uuid-ossp")]
+}
+
+/// Courts table - stores badminton court information
+model Court {
+  /// Secure UUID primary key
+  id String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+
+  /// BASIC INFO
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+
+  /// CONTACT - Array of phone numbers
+  phoneNumbers String[] @map("phone_numbers") @db.Text
+
+  /// ADDRESS (Split columns)
+  addressStreet   String? @map("address_street") @db.VarChar(255)
+  addressWard     String? @map("address_ward") @db.VarChar(100)
+  addressDistrict String? @map("address_district") @db.VarChar(100)
+  addressCity     String? @default("Hà Nội") @map("address_city") @db.VarChar(100)
+
+  /// GOOGLE MAPS STYLE DETAILS (JSONB)
+  /// Stores: Amenities, Payments, Service Options, Highlights, etc.
+  details Json @default("{}") @db.JsonB
+
+  /// OPENING HOURS (JSONB)
+  /// Format: {"mon": "07:00-22:00", "tue": "07:00-22:00", ...}
+  openingHours Json @default("{}") @map("opening_hours") @db.JsonB
+
+  /// LOCATION (PostGIS) - Using Unsupported for GEOGRAPHY type
+  /// Stores the coordinate point for the Interactive Map
+  location Unsupported("geography(Point, 4326)")?
+
+  /// METADATA
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([addressDistrict], map: "idx_courts_district")
+  @@index([details(ops: JsonbOps)], map: "idx_courts_details", type: Gin)
+  @@map("courts")
+}

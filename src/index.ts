@@ -1,0 +1,50 @@
+import express, { type Express } from 'express';
+import { config } from './config/index.js';
+import { connectDatabase, disconnectDatabase } from './config/database.js';
+import { apiRoutes } from './routes/index.js';
+import { errorHandler, notFoundHandler } from './middlewares/index.js';
+
+const app: Express = express();
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Health check
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// API routes
+app.use('/api', apiRoutes);
+
+// Error handling
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+// Graceful shutdown
+async function shutdown(): Promise<void> {
+  console.log('Shutting down...');
+  await disconnectDatabase();
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+// Start server
+async function start(): Promise<void> {
+  // Start listening first
+  app.listen(config.port, () => {
+    console.log(`🚀 Server running on port ${config.port}`);
+    console.log(`📦 Environment: ${config.nodeEnv}`);
+  });
+
+  // Then connect to database (non-blocking)
+  const dbConnected = await connectDatabase();
+  if (!dbConnected) {
+    console.warn('⚠️  Server running without database connection. Run docker:up first.');
+  }
+}
+
+start().catch(console.error);
