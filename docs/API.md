@@ -1,4 +1,4 @@
-# Arc Badminton Backend API Documentation
+# Smatch Badminton Backend API Documentation
 
 Base URL: `http://localhost:3000`
 
@@ -288,6 +288,259 @@ curl "http://localhost:3000/api/courts/nearby?latitude=21.0285&longitude=105.854
 
 ---
 
+## Availability API
+
+Base path: `/api/courts/:courtId/availability`
+
+### Get Court Availability
+
+```http
+GET /api/courts/:courtId/availability?date=YYYY-MM-DD
+```
+
+Get availability for all sub-courts of a court on a specific date. Returns time slots with availability status and pricing.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `courtId` | UUID | Court ID |
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `date` | string | Yes | Date in YYYY-MM-DD format |
+
+**Example Request**
+```bash
+curl "http://localhost:3000/api/courts/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/availability?date=2025-12-01"
+```
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "courtId": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    "courtName": "Sân cầu lông Ngọc Khánh",
+    "date": "2025-12-01",
+    "dayType": "weekday",
+    "openingTime": "06:00",
+    "closingTime": "22:00",
+    "subCourts": [
+      {
+        "id": "sub-court-uuid-1",
+        "name": "Sân 1",
+        "description": "Sân cầu lông số 1",
+        "isActive": true,
+        "slots": [
+          {
+            "startTime": "06:00",
+            "endTime": "06:30",
+            "isAvailable": true,
+            "price": 35000
+          },
+          {
+            "startTime": "06:30",
+            "endTime": "07:00",
+            "isAvailable": true,
+            "price": 35000
+          },
+          {
+            "startTime": "10:00",
+            "endTime": "10:30",
+            "isAvailable": false,
+            "price": 35000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Notes:**
+- `dayType` can be `weekday`, `weekend`, or `holiday`
+- `price` is for a 30-minute slot (half of hourly rate)
+- `isAvailable: false` means the slot is either booked or closed for maintenance
+
+---
+
+## Bookings API
+
+Base path: `/api/bookings`
+
+### Create Booking
+
+```http
+POST /api/bookings
+```
+
+Create a new court booking. Minimum duration is 1 hour, in 30-minute increments.
+
+**Request Body**
+```json
+{
+  "subCourtId": "sub-court-uuid",
+  "guestName": "Nguyễn Văn A",
+  "guestPhone": "0901234567",
+  "guestEmail": "email@example.com",
+  "date": "2025-12-01",
+  "startTime": "10:00",
+  "endTime": "12:00",
+  "notes": "Optional notes"
+}
+```
+
+**Required Fields**
+- `subCourtId` (UUID): Sub-court to book
+- `guestName` (string): Guest's name
+- `guestPhone` (string): Guest's phone number
+- `date` (string): Date in YYYY-MM-DD format
+- `startTime` (string): Start time in HH:mm format
+- `endTime` (string): End time in HH:mm format
+
+**Optional Fields**
+- `guestEmail` (string): Guest's email
+- `notes` (string): Additional notes
+
+**Response (201 Created)**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "booking-uuid",
+    "subCourtId": "sub-court-uuid",
+    "subCourtName": "Sân 1",
+    "courtId": "court-uuid",
+    "courtName": "Sân cầu lông Ngọc Khánh",
+    "guestName": "Nguyễn Văn A",
+    "guestPhone": "0901234567",
+    "guestEmail": "email@example.com",
+    "date": "2025-12-01",
+    "startTime": "10:00",
+    "endTime": "12:00",
+    "totalPrice": 140000,
+    "status": "pending",
+    "notes": "Optional notes",
+    "createdAt": "2025-12-01T08:00:00.000Z"
+  }
+}
+```
+
+**Error Responses**
+- `400 Bad Request`: Invalid date/time format, duration less than 1 hour, or not in 30-minute increments
+- `404 Not Found`: Sub-court not found
+- `409 Conflict`: Time slot is already booked
+
+---
+
+### Get Booking by ID
+
+```http
+GET /api/bookings/:id
+```
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | Booking ID |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "booking-uuid",
+    "subCourtId": "sub-court-uuid",
+    "subCourtName": "Sân 1",
+    "courtId": "court-uuid",
+    "courtName": "Sân cầu lông Ngọc Khánh",
+    "guestName": "Nguyễn Văn A",
+    "guestPhone": "0901234567",
+    "guestEmail": "email@example.com",
+    "date": "2025-12-01",
+    "startTime": "10:00",
+    "endTime": "12:00",
+    "totalPrice": 140000,
+    "status": "confirmed",
+    "notes": null,
+    "createdAt": "2025-12-01T08:00:00.000Z"
+  }
+}
+```
+
+---
+
+### Get Bookings by Phone
+
+```http
+GET /api/bookings?phone=0901234567
+```
+
+Get all bookings for a phone number.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `phone` | string | Yes | Phone number |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "booking-uuid",
+      "subCourtName": "Sân 1",
+      "courtName": "Sân cầu lông Ngọc Khánh",
+      "date": "2025-12-01",
+      "startTime": "10:00",
+      "endTime": "12:00",
+      "totalPrice": 140000,
+      "status": "confirmed"
+    }
+  ]
+}
+```
+
+---
+
+### Cancel Booking
+
+```http
+DELETE /api/bookings/:id
+```
+
+Cancel an existing booking.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | Booking ID |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "booking-uuid",
+    "status": "cancelled",
+    ...
+  }
+}
+```
+
+**Error Responses**
+- `400 Bad Request`: Booking already cancelled or completed
+- `404 Not Found`: Booking not found
+
+---
+
 ## Map Tiles API
 
 Base path: `/api/map-tiles`
@@ -474,8 +727,76 @@ TILE_SERVER_URL=http://localhost:7800
 | addressDistrict | string | District/Quận |
 | addressCity | string | City (default: Hà Nội) |
 | details | JSON | Amenities, payments, etc. |
-| openingHours | JSON | Operating hours |
+| openingHours | JSON | Operating hours per day |
 | location | geography | GPS coordinates |
 | createdAt | timestamp | Creation time |
 | updatedAt | timestamp | Last update time |
 
+### SubCourt
+
+Individual playable courts within a venue.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID | Primary key |
+| courtId | UUID | Parent court reference |
+| name | string | Sub-court name (e.g., "Sân 1") |
+| description | string | Optional description |
+| isActive | boolean | Whether the sub-court is active |
+| createdAt | timestamp | Creation time |
+| updatedAt | timestamp | Last update time |
+
+### Booking
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID | Primary key |
+| subCourtId | UUID | Sub-court reference |
+| userId | UUID | User reference (optional, for future) |
+| guestName | string | Guest's name |
+| guestPhone | string | Guest's phone (required) |
+| guestEmail | string | Guest's email (optional) |
+| date | date | Booking date |
+| startTime | time | Start time |
+| endTime | time | End time |
+| totalPrice | integer | Total price in VND |
+| status | enum | pending, confirmed, cancelled, completed |
+| notes | string | Optional notes |
+| createdAt | timestamp | Creation time |
+| updatedAt | timestamp | Last update time |
+
+### PricingRule
+
+Tiered pricing rules per court.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID | Primary key |
+| courtId | UUID | Court reference |
+| name | string | Rule name (e.g., "Weekday Morning") |
+| dayType | enum | weekday, weekend, holiday |
+| startTime | time | Rule start time |
+| endTime | time | Rule end time |
+| pricePerHour | integer | Price per hour in VND |
+| isActive | boolean | Whether the rule is active |
+
+### SubCourtClosure
+
+Track when sub-courts are unavailable.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID | Primary key |
+| subCourtId | UUID | Sub-court reference |
+| date | date | Closure date |
+| startTime | time | Start time (null = full day) |
+| endTime | time | End time (null = full day) |
+| reason | string | Closure reason |
+
+### Holiday
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID | Primary key |
+| date | date | Holiday date (unique) |
+| name | string | Holiday name |
