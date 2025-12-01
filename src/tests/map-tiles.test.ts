@@ -6,10 +6,14 @@
  * Prerequisites:
  * - Docker services running (npm run docker:up)
  * - Server running (npm run dev)
+ * - Database seeded (npm run db:seed)
  */
 
 const API_BASE = 'http://localhost:3000';
 const TILE_SERVER = 'http://localhost:7800';
+
+// Correct tile coordinates for Hanoi area (21.0303°N, 105.8138°E) at zoom 14
+const HANOI_TILE = { z: 14, x: 13007, y: 7212 };
 
 interface TestResult {
   name: string;
@@ -32,14 +36,17 @@ async function runTests(): Promise<void> {
   // Test 3: Direct tile request to pg_tileserv
   results.push(await testDirectTileRequest());
 
-  // Test 4: Proxy route returns MVT
+  // Test 4: Proxy route returns 200
   results.push(await testProxyRoute());
 
   // Test 5: Proxy route returns correct content type
   results.push(await testProxyContentType());
 
-  // Test 6: Invalid tile coordinates return appropriate response
-  results.push(await testInvalidTileCoords());
+  // Test 6: Tile contains data (non-zero content length)
+  results.push(await testTileHasContent());
+
+  // Test 7: Empty tile for area without courts
+  results.push(await testEmptyTileArea());
 
   // Summary
   console.log('\n' + '='.repeat(50));
@@ -94,8 +101,8 @@ async function testTileFunctionExists(): Promise<TestResult> {
 async function testDirectTileRequest(): Promise<TestResult> {
   const name = 'Direct tile request to pg_tileserv returns 200';
   try {
-    // Tile coordinates for Hanoi area at zoom 14
-    const response = await fetch(`${TILE_SERVER}/public.courts_tile/14/13112/7491.pbf`);
+    const { z, x, y } = HANOI_TILE;
+    const response = await fetch(`${TILE_SERVER}/public.courts_tile/${z}/${x}/${y}.pbf`);
 
     if (response.ok) {
       return { name, passed: true, message: '' };
@@ -109,7 +116,8 @@ async function testDirectTileRequest(): Promise<TestResult> {
 async function testProxyRoute(): Promise<TestResult> {
   const name = 'Proxy route /api/map-tiles returns 200';
   try {
-    const response = await fetch(`${API_BASE}/api/map-tiles/14/13112/7491.pbf`);
+    const { z, x, y } = HANOI_TILE;
+    const response = await fetch(`${API_BASE}/api/map-tiles/${z}/${x}/${y}.pbf`);
 
     if (response.ok) {
       return { name, passed: true, message: '' };
@@ -123,7 +131,8 @@ async function testProxyRoute(): Promise<TestResult> {
 async function testProxyContentType(): Promise<TestResult> {
   const name = 'Proxy returns correct MVT content type';
   try {
-    const response = await fetch(`${API_BASE}/api/map-tiles/14/13112/7491.pbf`);
+    const { z, x, y } = HANOI_TILE;
+    const response = await fetch(`${API_BASE}/api/map-tiles/${z}/${x}/${y}.pbf`);
     const contentType = response.headers.get('content-type');
 
     if (contentType?.includes('application/vnd.mapbox-vector-tile')) {
@@ -135,18 +144,36 @@ async function testProxyContentType(): Promise<TestResult> {
   }
 }
 
-async function testInvalidTileCoords(): Promise<TestResult> {
-  const name = 'Invalid tile coordinates handled gracefully';
+async function testTileHasContent(): Promise<TestResult> {
+  const name = 'Tile for Hanoi area contains court data';
   try {
-    // Request tile at invalid coordinates (zoom 0 should only have 1 tile: 0/0/0)
-    const response = await fetch(`${API_BASE}/api/map-tiles/0/999/999.pbf`);
+    const { z, x, y } = HANOI_TILE;
+    const response = await fetch(`${API_BASE}/api/map-tiles/${z}/${x}/${y}.pbf`);
+    const contentLength = response.headers.get('content-length');
+    const length = contentLength ? parseInt(contentLength, 10) : 0;
 
-    // pg_tileserv returns 200 with empty tile for out-of-bounds requests
-    // or 400 for truly invalid params
-    if (response.status === 200 || response.status === 400) {
+    if (length > 0) {
       return { name, passed: true, message: '' };
     }
-    return { name, passed: false, message: `Unexpected status: ${response.status}` };
+    return { name, passed: false, message: `Content-Length: ${length} (expected > 0). Did you run db:seed?` };
+  } catch (error) {
+    return { name, passed: false, message: `Error: ${error}` };
+  }
+}
+
+async function testEmptyTileArea(): Promise<TestResult> {
+  const name = 'Empty tile returned for area without courts';
+  try {
+    // Tile coordinates for area far from Hanoi (middle of Pacific Ocean)
+    const response = await fetch(`${API_BASE}/api/map-tiles/14/1000/8000.pbf`);
+    const contentLength = response.headers.get('content-length');
+    const length = contentLength ? parseInt(contentLength, 10) : 0;
+
+    // Should return 200 with empty tile (MVT header only ~25 bytes or less)
+    if (response.ok && length < 50) {
+      return { name, passed: true, message: '' };
+    }
+    return { name, passed: false, message: `Expected empty/small tile, got Content-Length: ${length}` };
   } catch (error) {
     return { name, passed: false, message: `Error: ${error}` };
   }
@@ -154,4 +181,3 @@ async function testInvalidTileCoords(): Promise<TestResult> {
 
 // Run tests
 runTests().catch(console.error);
-
