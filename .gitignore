@@ -33,3 +33,8 @@ prisma/*.db-journal
 # Misc
 tile.pbf
 
+# Test
+coverage/
+junit.xml
+*.junit.xml
+

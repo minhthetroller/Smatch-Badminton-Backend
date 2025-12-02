@@ -43,7 +43,109 @@ model Court {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
+  /// RELATIONS
+  subCourts    SubCourt[]    @relation("CourtSubCourts")
+  pricingRules PricingRule[] @relation("CourtPricingRules")
+
   @@index([addressDistrict], map: "idx_courts_district")
   @@index([details(ops: JsonbOps)], map: "idx_courts_details", type: Gin)
   @@map("courts")
+}
+
+/// SubCourt - Individual playable courts within a venue
+model SubCourt {
+  id          String  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  courtId     String  @map("court_id") @db.Uuid
+  name        String  @db.VarChar(100)
+  description String? @db.Text
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// RELATIONS
+  court    Court             @relation("CourtSubCourts", fields: [courtId], references: [id], onDelete: Cascade)
+  closures SubCourtClosure[] @relation("SubCourtClosures")
+  bookings Booking[]         @relation("SubCourtBookings")
+
+  @@index([courtId], map: "idx_sub_courts_court_id")
+  @@map("sub_courts")
+}
+
+/// SubCourtClosure - Track exceptions when a sub-court is unavailable
+model SubCourtClosure {
+  id         String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  subCourtId String    @map("sub_court_id") @db.Uuid
+  date       DateTime  @db.Date
+  startTime  DateTime? @map("start_time") @db.Time() // NULL = full day closure
+  endTime    DateTime? @map("end_time") @db.Time() // NULL = full day closure
+  reason     String?   @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  /// RELATIONS
+  subCourt SubCourt @relation("SubCourtClosures", fields: [subCourtId], references: [id], onDelete: Cascade)
+
+  @@index([subCourtId, date], map: "idx_sub_court_closures_lookup")
+  @@map("sub_court_closures")
+}
+
+/// PricingRule - Tiered pricing at court level
+model PricingRule {
+  id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  courtId      String   @map("court_id") @db.Uuid
+  name         String   @db.VarChar(100)
+  dayType      String   @map("day_type") @db.VarChar(20) // 'weekday', 'weekend', 'holiday'
+  startTime    DateTime @map("start_time") @db.Time()
+  endTime      DateTime @map("end_time") @db.Time()
+  pricePerHour Int      @map("price_per_hour") // Price in VND
+  isActive     Boolean  @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// RELATIONS
+  court Court @relation("CourtPricingRules", fields: [courtId], references: [id], onDelete: Cascade)
+
+  @@index([courtId, dayType, isActive], map: "idx_pricing_rules_court")
+  @@map("pricing_rules")
+}
+
+/// Booking - Track reservations per sub-court and time slot
+model Booking {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  subCourtId String   @map("sub_court_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid // NULL for guest, future FK to users
+  guestName  String?  @map("guest_name") @db.VarChar(255)
+  guestPhone String?  @map("guest_phone") @db.VarChar(20)
+  guestEmail String?  @map("guest_email") @db.VarChar(255)
+  date       DateTime @db.Date
+  startTime  DateTime @map("start_time") @db.Time()
+  endTime    DateTime @map("end_time") @db.Time()
+  totalPrice Int      @map("total_price") // Calculated from pricing_rules
+  status     String   @default("pending") @db.VarChar(20) // pending, confirmed, cancelled, completed
+  notes      String?  @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// RELATIONS
+  subCourt SubCourt @relation("SubCourtBookings", fields: [subCourtId], references: [id], onDelete: Cascade)
+
+  @@index([subCourtId, date, status], map: "idx_bookings_sub_court_date")
+  @@index([date, startTime, endTime], map: "idx_bookings_date_range")
+  @@map("bookings")
+}
+
+/// Holiday - Track holidays for pricing rules
+model Holiday {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  date       DateTime @unique @db.Date
+  name       String?  @db.VarChar(255)
+  multiplier Float    @default(1.0) // Price multiplier for this holiday (e.g., 1.5 = 50% increase)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([date], map: "idx_holidays_date")
+  @@map("holidays")
 }

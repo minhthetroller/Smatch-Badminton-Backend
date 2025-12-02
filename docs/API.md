@@ -800,3 +800,4 @@ Track when sub-courts are unavailable.
 | id | UUID | Primary key |
 | date | date | Holiday date (unique) |
 | name | string | Holiday name |
+

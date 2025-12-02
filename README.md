@@ -1,4 +1,4 @@
-# Arc Badminton Backend
+# Smatch Badminton Backend
 
 Backend service for the Arc Badminton application, designed to manage badminton court data and serve vector map tiles for geospatial visualization.
 

@@ -11,7 +11,7 @@ export function validate<T>(schema: ValidationSchema<T>) {
 
     for (const [key, validator] of Object.entries(schema)) {
       const value = (req.body as Record<string, unknown>)[key];
-      if (validator && !validator(value)) {
+      if (typeof validator === 'function' && !validator(value)) {
         errors.push(`Invalid value for field: ${key}`);
       }
     }
