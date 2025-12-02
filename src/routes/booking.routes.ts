@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { availabilityController } from '../controllers/index.js';
+import { availabilityController, paymentController } from '../controllers/index.js';
 
 const router = Router();
 
@@ -18,6 +18,12 @@ router.post('/', (req, res, next) => availabilityController.createBooking(req, r
 // DELETE /bookings/:id
 // Cancel a booking
 router.delete('/:id', (req, res, next) => availabilityController.cancelBooking(req, res, next));
+
+// GET /bookings/:bookingId/payment
+// Get payment info for a booking
+router.get('/:bookingId/payment', (req, res, next) =>
+  paymentController.getPaymentByBookingId(req, res, next)
+);
 
 export { router as bookingRoutes };
 

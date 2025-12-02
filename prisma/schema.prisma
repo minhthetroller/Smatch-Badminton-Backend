@@ -130,11 +130,35 @@ model Booking {
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   /// RELATIONS
-  subCourt SubCourt @relation("SubCourtBookings", fields: [subCourtId], references: [id], onDelete: Cascade)
+  subCourt SubCourt  @relation("SubCourtBookings", fields: [subCourtId], references: [id], onDelete: Cascade)
+  payments Payment[] @relation("BookingPayments")
 
   @@index([subCourtId, date, status], map: "idx_bookings_sub_court_date")
   @@index([date, startTime, endTime], map: "idx_bookings_date_range")
   @@map("bookings")
+}
+
+/// Payment - Track ZaloPay payment transactions
+model Payment {
+  id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  bookingId    String   @map("booking_id") @db.Uuid
+  appTransId   String   @unique @map("app_trans_id") @db.VarChar(40) // ZaloPay transaction ID (yymmdd_xxx)
+  zpTransId    String?  @map("zp_trans_id") @db.VarChar(20) // ZaloPay's transaction ID (from callback)
+  zpTransToken String?  @map("zp_trans_token") @db.VarChar(256) // Token for ZaloPay mobile SDK
+  amount       Int      // Amount in VND
+  status       String   @default("pending") @db.VarChar(20) // pending, success, failed, expired
+  orderUrl     String?  @map("order_url") @db.Text // ZaloPay order URL for QR code
+  callbackData Json?    @map("callback_data") @db.JsonB // Store raw callback for debugging
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// RELATIONS
+  booking Booking @relation("BookingPayments", fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId], map: "idx_payments_booking_id")
+  @@index([status], map: "idx_payments_status")
+  @@map("payments")
 }
 
 /// Holiday - Track holidays for pricing rules

@@ -543,6 +543,336 @@ Cancel an existing booking.
 
 ---
 
+### Get Payment for Booking
+
+```http
+GET /api/bookings/:bookingId/payment
+```
+
+Get payment information for a specific booking.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bookingId` | UUID | Booking ID |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "payment-uuid",
+    "bookingId": "booking-uuid",
+    "appTransId": "251202_abc12345001",
+    "zpTransId": "240520000001234",
+    "amount": 140000,
+    "status": "success",
+    "orderUrl": "https://sb-openapi.zalopay.vn/v2/...",
+    "createdAt": "2025-12-02T10:00:00.000Z",
+    "updatedAt": "2025-12-02T10:05:00.000Z"
+  }
+}
+```
+
+---
+
+## Payments API (ZaloPay Integration)
+
+Base path: `/api/payments`
+
+The payment system uses ZaloPay's dynamic QR code payment method. When a payment is initiated, the time slot is locked in Redis for 10 minutes to prevent double-booking. **Real-time payment notifications** are delivered via WebSocket.
+
+### Payment Flow (Flutter Mobile App)
+
+1. User creates a booking → booking status = `pending`
+2. Flutter app calls `POST /api/payments/create` with `bookingId`
+3. Backend:
+   - Acquires Redis lock for the time slot (10 min TTL)
+   - Creates payment atomically in a database transaction
+   - Calls ZaloPay API to create an order
+   - Generates QR code image (base64)
+   - Returns QR code + WebSocket URL
+4. Flutter app:
+   - Displays QR code image using `Image.memory(base64Decode(rawBase64))`
+   - Connects to WebSocket and subscribes to payment updates
+5. User scans QR code and pays via ZaloPay app
+6. ZaloPay calls our callback endpoint
+7. Backend updates payment status, confirms booking, and **notifies via WebSocket**
+8. Flutter app receives real-time notification and navigates to success screen
+
+### Create Payment
+
+```http
+POST /api/payments/create
+```
+
+Create a ZaloPay payment order for a booking. Returns QR code image and WebSocket URL for Flutter app.
+
+**Request Body**
+```json
+{
+  "bookingId": "booking-uuid"
+}
+```
+
+**Response (201 Created)**
+```json
+{
+  "success": true,
+  "data": {
+    "payment": {
+      "id": "payment-uuid",
+      "bookingId": "booking-uuid",
+      "appTransId": "251202_abc12345001",
+      "zpTransId": null,
+      "amount": 140000,
+      "status": "pending",
+      "orderUrl": "https://sb-openapi.zalopay.vn/v2/...",
+      "createdAt": "2025-12-02T10:00:00.000Z",
+      "updatedAt": "2025-12-02T10:00:00.000Z"
+    },
+    "orderUrl": "https://sb-openapi.zalopay.vn/v2/...",
+    "qrCode": {
+      "base64": "data:image/png;base64,iVBORw0KGgo...",
+      "rawBase64": "iVBORw0KGgo..."
+    },
+    "zpTransToken": "token_for_zalopay_sdk",
+    "expireAt": "2025-12-02T10:10:00.000Z",
+    "wsSubscribeUrl": "ws://localhost:3000/ws/payments"
+  }
+}
+```
+
+**Response Fields:**
+| Field | Description |
+|-------|-------------|
+| `qrCode.base64` | Full data URL for HTML `<img src="">` |
+| `qrCode.rawBase64` | Raw base64 for Flutter `Image.memory()` |
+| `zpTransToken` | Token for ZaloPay SDK (optional alternative to QR) |
+| `expireAt` | When slot lock expires (10 min) |
+| `wsSubscribeUrl` | WebSocket URL for real-time notifications |
+
+**Flutter Usage:**
+```dart
+import 'dart:convert';
+import 'package:flutter/material.dart';
+
+// Display QR code
+Image.memory(base64Decode(response.data.qrCode.rawBase64))
+```
+
+**Error Responses**
+- `400 Bad Request`: Invalid booking status or payment service not configured
+- `404 Not Found`: Booking not found
+- `409 Conflict`: Time slot is currently being reserved by another user
+
+---
+
+### WebSocket: Real-time Payment Notifications
+
+Connect to WebSocket for real-time payment status updates.
+
+**WebSocket URL:** `ws://localhost:3000/ws/payments` (or `wss://` for production)
+
+**Connection Flow:**
+```
+1. Connect to WebSocket
+2. Send: {"action": "subscribe", "paymentId": "payment-uuid"}
+3. Receive: {"type": "subscribed", "paymentId": "...", "message": "..."}
+4. Wait for payment notification...
+5. Receive: {"type": "payment_status", "status": "success", ...}
+```
+
+**Subscribe to Payment**
+```json
+{
+  "action": "subscribe",
+  "paymentId": "payment-uuid"
+}
+```
+
+**Payment Success Notification**
+```json
+{
+  "type": "payment_status",
+  "paymentId": "payment-uuid",
+  "status": "success",
+  "bookingId": "booking-uuid",
+  "zpTransId": "240520000001234",
+  "message": "Payment successful! Your booking has been confirmed."
+}
+```
+
+**Payment Failed Notification**
+```json
+{
+  "type": "payment_status",
+  "paymentId": "payment-uuid",
+  "status": "failed",
+  "bookingId": "booking-uuid",
+  "message": "Payment failed. Please try again."
+}
+```
+
+**Flutter WebSocket Example:**
+```dart
+import 'dart:convert';
+import 'package:web_socket_channel/web_socket_channel.dart';
+
+final channel = WebSocketChannel.connect(
+  Uri.parse('ws://your-server.com/ws/payments'),
+);
+
+// Subscribe to payment
+channel.sink.add(jsonEncode({
+  'action': 'subscribe',
+  'paymentId': paymentId,
+}));
+
+// Listen for notifications
+channel.stream.listen((message) {
+  final data = jsonDecode(message);
+  if (data['type'] == 'payment_status') {
+    if (data['status'] == 'success') {
+      // Navigate to success screen
+      Navigator.pushNamed(context, '/booking-success');
+    } else if (data['status'] == 'failed') {
+      // Show error dialog
+      showErrorDialog(data['message']);
+    }
+  }
+});
+```
+
+**WebSocket Messages:**
+| Action | Description |
+|--------|-------------|
+| `subscribe` | Subscribe to payment updates |
+| `unsubscribe` | Unsubscribe from payment |
+| `ping` | Keep-alive (responds with `pong`) |
+
+---
+
+### ZaloPay Callback (Webhook)
+
+```http
+POST /api/payments/callback
+```
+
+Webhook endpoint called by ZaloPay after payment completion. **Do not call this endpoint directly.**
+
+**Request Body** (from ZaloPay)
+```json
+{
+  "data": "{\"app_id\":123,\"app_trans_id\":\"251202_abc12345001\",...}",
+  "mac": "hmac_signature",
+  "type": 1
+}
+```
+
+**Response** (to ZaloPay)
+```json
+{
+  "return_code": 1,
+  "return_message": "Success"
+}
+```
+
+**Notes:**
+- `type: 1` = payment success
+- On successful payment, the booking status is automatically updated to `confirmed`
+- The Redis slot lock is released after callback processing
+
+---
+
+### Get Payment by ID
+
+```http
+GET /api/payments/:id
+```
+
+Get payment details with associated booking information.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | Payment ID |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "payment-uuid",
+    "bookingId": "booking-uuid",
+    "appTransId": "251202_abc12345001",
+    "zpTransId": "240520000001234",
+    "amount": 140000,
+    "status": "success",
+    "orderUrl": "https://sb-openapi.zalopay.vn/v2/...",
+    "createdAt": "2025-12-02T10:00:00.000Z",
+    "updatedAt": "2025-12-02T10:05:00.000Z",
+    "booking": {
+      "id": "booking-uuid",
+      "subCourtId": "sub-court-uuid",
+      "guestName": "Nguyễn Văn A",
+      "guestPhone": "0901234567",
+      "date": "2025-12-02",
+      "startTime": "10:00",
+      "endTime": "12:00",
+      "totalPrice": 140000,
+      "status": "confirmed"
+    }
+  }
+}
+```
+
+---
+
+### Query Payment Status
+
+```http
+GET /api/payments/:id/status
+```
+
+Query the latest payment status from ZaloPay and sync with local database. Useful for polling payment status.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | Payment ID |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "payment-uuid",
+    "bookingId": "booking-uuid",
+    "appTransId": "251202_abc12345001",
+    "zpTransId": "240520000001234",
+    "amount": 140000,
+    "status": "success",
+    "orderUrl": "https://sb-openapi.zalopay.vn/v2/...",
+    "createdAt": "2025-12-02T10:00:00.000Z",
+    "updatedAt": "2025-12-02T10:05:00.000Z"
+  }
+}
+```
+
+**Payment Status Values**
+| Status | Description |
+|--------|-------------|
+| `pending` | Payment created, waiting for user to pay |
+| `success` | Payment completed successfully |
+| `failed` | Payment failed |
+| `expired` | Payment expired (user didn't pay within time limit) |
+
+---
+
 ## Map Tiles API
 
 Base path: `/api/map-tiles`
@@ -699,10 +1029,31 @@ npm run dev
 ### Environment Variables
 
 ```env
+# Server
 PORT=3000
 NODE_ENV=development
+
+# Database
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/arc_badminton
+
+# Tile Server
 TILE_SERVER_URL=http://localhost:7800
+
+# Redis (for slot locking)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# ZaloPay Configuration
+ZALOPAY_APP_ID=your_app_id
+ZALOPAY_KEY1=your_key1
+ZALOPAY_KEY2=your_key2
+ZALOPAY_ENDPOINT=https://sb-openapi.zalopay.vn  # Sandbox
+# ZALOPAY_ENDPOINT=https://openapi.zalopay.vn   # Production
+ZALOPAY_CALLBACK_URL=https://your-domain.com/api/payments/callback
+
+# Payment Settings
+SLOT_LOCK_TTL_SECONDS=600  # 10 minutes
 ```
 
 ### Docker Services
@@ -711,6 +1062,7 @@ TILE_SERVER_URL=http://localhost:7800
 |---------|------|-------------|
 | PostgreSQL | 5432 | Database with PostGIS |
 | pg_tileserv | 7800 | Vector tile server |
+| Redis | 6379 | Cache for slot locking |
 
 ---
 
@@ -809,4 +1161,22 @@ Track when sub-courts are unavailable.
 | date | date | Holiday date (unique) |
 | name | string | Holiday name |
 | multiplier | float | Price multiplier (default: 1.0, e.g., 1.5 = 50% increase) |
+
+### Payment
+
+Track ZaloPay payment transactions.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID | Primary key |
+| bookingId | UUID | Booking reference |
+| appTransId | string | ZaloPay transaction ID (format: yymmdd_xxx) |
+| zpTransId | string | ZaloPay's internal transaction ID (from callback) |
+| zpTransToken | string | Token for ZaloPay mobile SDK |
+| amount | integer | Amount in VND |
+| status | enum | pending, success, failed, expired |
+| orderUrl | string | ZaloPay order URL for QR code |
+| callbackData | JSON | Raw callback data for debugging |
+| createdAt | timestamp | Creation time |
+| updatedAt | timestamp | Last update time |
 

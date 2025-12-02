@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import type {
   RawSubCourt,
@@ -126,8 +127,8 @@ export class AvailabilityRepository {
     excludeBookingId?: string
   ): Promise<boolean> {
     const excludeClause = excludeBookingId 
-      ? prisma.$queryRaw`AND id != ${excludeBookingId}::uuid`
-      : prisma.$queryRaw``;
+      ? Prisma.sql`AND id != ${excludeBookingId}::uuid`
+      : Prisma.empty;
     
     const result = await prisma.$queryRaw<{ count: bigint }[]>`
       SELECT COUNT(*) as count
