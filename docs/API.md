@@ -362,7 +362,9 @@ curl "http://localhost:3000/api/courts/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/avai
 
 **Notes:**
 - `dayType` can be `weekday`, `weekend`, or `holiday`
-- `price` is for a 30-minute slot (half of hourly rate)
+- `price` is the final calculated price for a 30-minute slot:
+  - Base price = hourly rate from PricingRule / 2
+  - If the date is a holiday, price = base price × holiday multiplier
 - `isAvailable: false` means the slot is either booked or closed for maintenance
 
 ---
@@ -780,6 +782,12 @@ Tiered pricing rules per court.
 | pricePerHour | integer | Price per hour in VND |
 | isActive | boolean | Whether the rule is active |
 
+**Pricing Calculation:**
+1. Find the matching `PricingRule` based on `dayType` and time window (`startTime` to `endTime`)
+2. Calculate base price: `pricePerHour / 2` (for 30-minute slot)
+3. If the date is a holiday, apply multiplier: `finalPrice = basePrice × holiday.multiplier`
+4. Return the rounded final price to the frontend
+
 ### SubCourtClosure
 
 Track when sub-courts are unavailable.
@@ -800,4 +808,5 @@ Track when sub-courts are unavailable.
 | id | UUID | Primary key |
 | date | date | Holiday date (unique) |
 | name | string | Holiday name |
+| multiplier | float | Price multiplier (default: 1.0, e.g., 1.5 = 50% increase) |
 
