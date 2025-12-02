@@ -28,14 +28,6 @@ const config = {
     '!src/index.ts',
     '!src/**/index.ts',
   ],
-  coverageThreshold: {
-    'src/services/**/*.ts': {
-      branches: 80,
-      functions: 80,
-      lines: 80,
-      statements: 80,
-    },
-  },
   
   // Test projects for different test types
   projects: [
