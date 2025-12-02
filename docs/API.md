@@ -1,4 +1,4 @@
-# Arc Badminton Backend API Documentation
+# Smatch Badminton Backend API Documentation
 
 Base URL: `http://localhost:3000`
 
