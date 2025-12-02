@@ -33,7 +33,7 @@ export class AvailabilityService {
 
     // Parse opening hours for the specific day
     const dateObj = new Date(date);
-    const dayOfWeek = DAY_NAMES[dateObj.getDay()];
+    const dayOfWeek = DAY_NAMES[dateObj.getDay()]!;
     const openingHours = court.openingHours as OpeningHours;
     const dayHours = openingHours[dayOfWeek];
 
@@ -41,7 +41,7 @@ export class AvailabilityService {
       throw new BadRequestError(`Court is closed on ${dayOfWeek}`);
     }
 
-    const [openingTime, closingTime] = dayHours.split('-');
+    const [openingTime = '00:00', closingTime = '23:59'] = dayHours.split('-');
 
     // Determine day type (holiday, weekend, or weekday)
     const isHoliday = await availabilityRepository.isHoliday(date);
@@ -215,23 +215,26 @@ export class AvailabilityService {
    */
   async getBookingsByPhone(phone: string): Promise<BookingResponse[]> {
     const bookings = await availabilityRepository.getBookingsByPhone(phone);
-    return bookings.map(b => ({
-      id: b.id,
-      subCourtId: '',
-      subCourtName: b.sub_court_name,
-      courtId: '',
-      courtName: b.court_name,
-      guestName: '',
-      guestPhone: phone,
-      guestEmail: null,
-      date: b.date.toISOString().split('T')[0],
-      startTime: b.start_time,
-      endTime: b.end_time,
-      totalPrice: b.total_price,
-      status: b.status as BookingResponse['status'],
-      notes: null,
-      createdAt: '',
-    }));
+    return bookings.map(b => {
+      const dateStr = b.date.toISOString().split('T')[0];
+      return {
+        id: b.id,
+        subCourtId: '',
+        subCourtName: b.sub_court_name,
+        courtId: '',
+        courtName: b.court_name,
+        guestName: '',
+        guestPhone: phone,
+        guestEmail: null,
+        date: dateStr ?? '',
+        startTime: b.start_time,
+        endTime: b.end_time,
+        totalPrice: b.total_price,
+        status: b.status as BookingResponse['status'],
+        notes: null,
+        createdAt: '',
+      };
+    });
   }
 
   // ==================== Private Helper Methods ====================
@@ -367,7 +370,9 @@ export class AvailabilityService {
    * Add minutes to a time string
    */
   private addMinutes(time: string, minutes: number): string {
-    const [hours, mins] = time.split(':').map(Number);
+    const parts = time.split(':').map(Number);
+    const hours = parts[0] ?? 0;
+    const mins = parts[1] ?? 0;
     const totalMinutes = hours * 60 + mins + minutes;
     const newHours = Math.floor(totalMinutes / 60);
     const newMins = totalMinutes % 60;
@@ -378,8 +383,12 @@ export class AvailabilityService {
    * Get minutes between two times
    */
   private getMinutesBetween(start: string, end: string): number {
-    const [startH, startM] = start.split(':').map(Number);
-    const [endH, endM] = end.split(':').map(Number);
+    const startParts = start.split(':').map(Number);
+    const endParts = end.split(':').map(Number);
+    const startH = startParts[0] ?? 0;
+    const startM = startParts[1] ?? 0;
+    const endH = endParts[0] ?? 0;
+    const endM = endParts[1] ?? 0;
     return (endH * 60 + endM) - (startH * 60 + startM);
   }
 
@@ -421,6 +430,7 @@ export class AvailabilityService {
     notes: string | null;
     created_at: Date;
   }): BookingResponse {
+    const dateStr = booking.date.toISOString().split('T')[0] ?? '';
     return {
       id: booking.id,
       subCourtId: booking.sub_court_id,
@@ -430,7 +440,7 @@ export class AvailabilityService {
       guestName: booking.guest_name,
       guestPhone: booking.guest_phone,
       guestEmail: booking.guest_email,
-      date: booking.date.toISOString().split('T')[0],
+      date: dateStr,
       startTime: booking.start_time,
       endTime: booking.end_time,
       totalPrice: booking.total_price,

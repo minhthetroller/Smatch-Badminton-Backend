@@ -1,4 +1,5 @@
 import { prisma } from '../config/database.js';
+import type { Prisma } from '@prisma/client';
 import type { CreateCourtDto, UpdateCourtDto, CourtQueryParams, CourtLocation } from '../types/index.js';
 
 export class CourtRepository {
@@ -58,8 +59,8 @@ export class CourtRepository {
         addressWard: rest.addressWard,
         addressDistrict: rest.addressDistrict,
         addressCity: rest.addressCity ?? 'Hà Nội',
-        details: rest.details ?? {},
-        openingHours: rest.openingHours ?? {},
+        details: (rest.details ?? {}) as Prisma.InputJsonValue,
+        openingHours: (rest.openingHours ?? {}) as Prisma.InputJsonValue,
       },
     });
   }
@@ -80,8 +81,8 @@ export class CourtRepository {
       where: { id },
       data: {
         ...rest,
-        details: rest.details ?? undefined,
-        openingHours: rest.openingHours ?? undefined,
+        details: rest.details as Prisma.InputJsonValue | undefined,
+        openingHours: rest.openingHours as Prisma.InputJsonValue | undefined,
       },
     });
   }
