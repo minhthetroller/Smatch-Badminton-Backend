@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import { config } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { apiRoutes } from './routes/index.js';
+import { docsRoutes } from './routes/docs.routes.js';
 import { errorHandler, notFoundHandler } from './middlewares/index.js';
 import { websocketService, redisService } from './services/index.js';
 
@@ -21,6 +22,9 @@ app.get('/health', (_req, res) => {
     wsConnections: websocketService.getConnectionCount(),
   });
 });
+
+// API Documentation (Swagger UI)
+app.use('/api/docs', docsRoutes);
 
 // API routes
 app.use('/api', apiRoutes);
@@ -50,7 +54,8 @@ async function start(): Promise<void> {
   server.listen(config.port, () => {
     console.log(`🚀 Server running on port ${config.port}`);
     console.log(`📦 Environment: ${config.nodeEnv}`);
-    console.log(`🔌 WebSocket available at ws://localhost:${config.port}/ws/payments`);
+    console.log(`📚 API Docs: http://localhost:${config.port}/api/docs`);
+    console.log(`🔌 WebSocket: ws://localhost:${config.port}/ws/payments`);
   });
 
   // Then connect to database (non-blocking)

@@ -369,6 +369,187 @@ curl "http://localhost:3000/api/courts/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/avai
 
 ---
 
+## Search API
+
+Base path: `/api/search`
+
+The search system provides real-time autocomplete suggestions using Redis Sorted Sets and full fuzzy search using PostgreSQL's pg_trgm extension for typo-tolerance.
+
+### Autocomplete (Search-as-you-type)
+
+```http
+GET /api/search/autocomplete?q=bad&limit=10
+```
+
+Get real-time autocomplete suggestions from Redis. Optimized for "search-as-you-type" experience with sub-millisecond response times.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | required | Search prefix (minimum 2 characters) |
+| `limit` | integer | 10 | Maximum results (max: 20) |
+
+**Example Request**
+```bash
+curl "http://localhost:3000/api/search/autocomplete?q=cầu%20giấy&limit=5"
+```
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "suggestions": [
+      {
+        "id": "court-uuid-1",
+        "text": "Sân cầu lông Cầu Giấy",
+        "score": 0
+      },
+      {
+        "id": "court-uuid-2",
+        "text": "Badminton Center Cầu Giấy",
+        "score": 0
+      }
+    ]
+  }
+}
+```
+
+---
+
+### Full Search (Fuzzy/Typo-tolerant)
+
+```http
+GET /api/search/courts?q=badminton&page=1&limit=10
+```
+
+Full fuzzy search using PostgreSQL pg_trgm. Supports typo-tolerance and returns paginated results with similarity scores.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | required | Search query (minimum 2 characters) |
+| `page` | integer | 1 | Page number |
+| `limit` | integer | 10 | Items per page (max: 50) |
+| `minSimilarity` | float | 0.3 | Minimum similarity threshold (0-1) |
+| `district` | string | - | Filter by district name |
+
+**Example Request**
+```bash
+curl "http://localhost:3000/api/search/courts?q=badmintn&page=1&limit=10"
+```
+
+**Response**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "court-uuid-1",
+      "name": "Sân Badminton ABC",
+      "addressDistrict": "Quận Cầu Giấy",
+      "addressCity": "Hà Nội",
+      "addressWard": "Phường Dịch Vọng",
+      "addressStreet": "123 Xuân Thủy",
+      "nameScore": 0.85,
+      "districtScore": 0.2
+    }
+  ],
+  "meta": {
+    "pagination": {
+      "page": 1,
+      "limit": 10,
+      "total": 15,
+      "totalPages": 2,
+      "hasNext": true,
+      "hasPrev": false
+    }
+  }
+}
+```
+
+**Notes:**
+- `nameScore` and `districtScore` indicate similarity match (0-1 scale)
+- Results are sorted by highest similarity score
+- Typo-tolerance: "badmintn" will match "badminton"
+
+---
+
+### Popular Searches
+
+```http
+GET /api/search/popular?limit=10
+```
+
+Get trending/popular search queries.
+
+**Query Parameters**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 10 | Number of results |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "searches": [
+      "cầu giấy",
+      "hoàn kiếm",
+      "badminton"
+    ]
+  }
+}
+```
+
+---
+
+### Admin: Rebuild Search Index
+
+```http
+POST /api/admin/search/reindex
+```
+
+Rebuild the Redis autocomplete index from the database. Use when search data becomes stale or after bulk data updates.
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Autocomplete index rebuilt successfully",
+    "indexed": 150,
+    "durationMs": 245
+  }
+}
+```
+
+---
+
+### Admin: Search Index Statistics
+
+```http
+GET /api/admin/search/stats
+```
+
+Get statistics about the search index.
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "autocompleteCount": 450,
+    "courtsCount": 150
+  }
+}
+```
+
+---
+
 ## Bookings API
 
 Base path: `/api/bookings`
