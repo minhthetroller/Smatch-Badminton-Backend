@@ -46,21 +46,21 @@ const STANDARD_PRICING: PricingRuleSeed[] = [
   { name: 'Holiday Evening', dayType: 'holiday', startTime: '17:00', endTime: '23:00', pricePerHour: 180000 },
 ];
 
-// Vietnamese holidays for 2025-2026
+// Vietnamese holidays for 2025-2026 with price multipliers
 const HOLIDAYS = [
-  { date: '2025-01-01', name: 'Tết Dương lịch' },
-  { date: '2025-01-28', name: 'Tết Nguyên đán (28 Tháng Chạp)' },
-  { date: '2025-01-29', name: 'Tết Nguyên đán' },
-  { date: '2025-01-30', name: 'Tết Nguyên đán' },
-  { date: '2025-01-31', name: 'Tết Nguyên đán' },
-  { date: '2025-02-01', name: 'Tết Nguyên đán' },
-  { date: '2025-02-02', name: 'Tết Nguyên đán' },
-  { date: '2025-02-03', name: 'Tết Nguyên đán' },
-  { date: '2025-04-07', name: 'Giỗ Tổ Hùng Vương' },
-  { date: '2025-04-30', name: 'Ngày Giải phóng miền Nam' },
-  { date: '2025-05-01', name: 'Ngày Quốc tế Lao động' },
-  { date: '2025-09-02', name: 'Quốc khánh' },
-  { date: '2026-01-01', name: 'Tết Dương lịch' },
+  { date: '2025-01-01', name: 'Tết Dương lịch', multiplier: 1.5 },
+  { date: '2025-01-28', name: 'Tết Nguyên đán (28 Tháng Chạp)', multiplier: 2.0 },
+  { date: '2025-01-29', name: 'Tết Nguyên đán', multiplier: 2.0 },
+  { date: '2025-01-30', name: 'Tết Nguyên đán', multiplier: 2.0 },
+  { date: '2025-01-31', name: 'Tết Nguyên đán', multiplier: 2.0 },
+  { date: '2025-02-01', name: 'Tết Nguyên đán', multiplier: 2.0 },
+  { date: '2025-02-02', name: 'Tết Nguyên đán', multiplier: 2.0 },
+  { date: '2025-02-03', name: 'Tết Nguyên đán', multiplier: 2.0 },
+  { date: '2025-04-07', name: 'Giỗ Tổ Hùng Vương', multiplier: 1.5 },
+  { date: '2025-04-30', name: 'Ngày Giải phóng miền Nam', multiplier: 1.5 },
+  { date: '2025-05-01', name: 'Ngày Quốc tế Lao động', multiplier: 1.5 },
+  { date: '2025-09-02', name: 'Quốc khánh', multiplier: 1.5 },
+  { date: '2026-01-01', name: 'Tết Dương lịch', multiplier: 1.5 },
 ];
 
 async function main(): Promise<void> {
@@ -241,11 +241,11 @@ async function main(): Promise<void> {
   await prisma.court.deleteMany();
   console.log('✅ Cleared all existing data');
 
-  // Insert holidays
+  // Insert holidays with multipliers
   console.log('\n📅 Seeding holidays...');
   for (const holiday of HOLIDAYS) {
     await prisma.$executeRaw`
-      INSERT INTO holidays (date, name) VALUES (${holiday.date}::date, ${holiday.name})
+      INSERT INTO holidays (date, name, multiplier) VALUES (${holiday.date}::date, ${holiday.name}, ${holiday.multiplier})
     `;
   }
   console.log(`✅ Created ${HOLIDAYS.length} holidays`);

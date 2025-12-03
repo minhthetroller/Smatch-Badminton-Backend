@@ -1,10 +1,13 @@
 import express, { type Express } from 'express';
+import { createServer } from 'http';
 import { config } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { apiRoutes } from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middlewares/index.js';
+import { websocketService, redisService } from './services/index.js';
 
 const app: Express = express();
+const server = createServer(app);
 
 // Middleware
 app.use(express.json());
@@ -12,7 +15,11 @@ app.use(express.urlencoded({ extended: true }));
 
 // Health check
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    wsConnections: websocketService.getConnectionCount(),
+  });
 });
 
 // API routes
@@ -25,6 +32,8 @@ app.use(errorHandler);
 // Graceful shutdown
 async function shutdown(): Promise<void> {
   console.log('Shutting down...');
+  websocketService.close();
+  await redisService.close();
   await disconnectDatabase();
   process.exit(0);
 }
@@ -34,10 +43,14 @@ process.on('SIGTERM', shutdown);
 
 // Start server
 async function start(): Promise<void> {
-  // Start listening first
-  app.listen(config.port, () => {
+  // Initialize WebSocket server
+  websocketService.initialize(server);
+
+  // Start HTTP server
+  server.listen(config.port, () => {
     console.log(`🚀 Server running on port ${config.port}`);
     console.log(`📦 Environment: ${config.nodeEnv}`);
+    console.log(`🔌 WebSocket available at ws://localhost:${config.port}/ws/payments`);
   });
 
   // Then connect to database (non-blocking)
