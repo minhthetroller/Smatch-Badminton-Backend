@@ -1,0 +1,1416 @@
+openapi: 3.1.0
+info:
+  title: Smatch Badminton Backend API
+  description: |
+    API for managing badminton court information, bookings, payments, and serving vector map tiles.
+    
+    ## Features
+    - **Courts Management**: CRUD operations for badminton courts
+    - **Search & Autocomplete**: Real-time search with Vietnamese support
+    - **Availability**: Time slot availability with pricing
+    - **Bookings**: Court reservation system
+    - **Payments**: ZaloPay integration with real-time WebSocket notifications
+    - **Map Tiles**: Vector tiles for interactive maps
+  version: 1.0.0
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Courts
+    description: Court management operations
+  - name: Search
+    description: Search and autocomplete functionality
+  - name: Availability
+    description: Court availability and pricing
+  - name: Bookings
+    description: Booking management
+  - name: Payments
+    description: ZaloPay payment integration
+  - name: Map Tiles
+    description: Vector map tiles
+  - name: Admin
+    description: Administrative operations
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Check if the server is running
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: '2025-11-25T12:00:00.000Z'
+
+  /api/courts:
+    get:
+      tags:
+        - Courts
+      summary: List all courts
+      description: Get paginated list of all courts with optional filtering
+      operationId: listCourts
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page
+          schema:
+            type: integer
+            default: 10
+        - name: district
+          in: query
+          description: Filter by district name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of courts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourtListResponse'
+
+    post:
+      tags:
+        - Courts
+      summary: Create a new court
+      description: Create a new badminton court
+      operationId: createCourt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCourtRequest'
+      responses:
+        '201':
+          description: Court created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourtResponse'
+
+  /api/courts/nearby:
+    get:
+      tags:
+        - Courts
+      summary: Find nearby courts
+      description: Find courts within a specified radius from a location
+      operationId: findNearbyCourts
+      parameters:
+        - name: latitude
+          in: query
+          required: true
+          description: GPS latitude
+          schema:
+            type: number
+            format: float
+        - name: longitude
+          in: query
+          required: true
+          description: GPS longitude
+          schema:
+            type: number
+            format: float
+        - name: radius
+          in: query
+          description: Search radius in km
+          schema:
+            type: number
+            format: float
+            default: 5
+      responses:
+        '200':
+          description: List of nearby courts with distance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NearbyCourtListResponse'
+
+  /api/courts/{id}:
+    get:
+      tags:
+        - Courts
+      summary: Get court by ID
+      description: Get a specific court by its UUID
+      operationId: getCourtById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Court UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Court details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourtResponse'
+        '404':
+          description: Court not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Courts
+      summary: Update a court
+      description: Update an existing court
+      operationId: updateCourt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Court UUID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCourtRequest'
+      responses:
+        '200':
+          description: Court updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourtResponse'
+        '404':
+          description: Court not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Courts
+      summary: Delete a court
+      description: Delete an existing court
+      operationId: deleteCourt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Court UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Court deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessageResponse'
+        '404':
+          description: Court not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/courts/{courtId}/availability:
+    get:
+      tags:
+        - Availability
+      summary: Get court availability
+      description: Get availability for all sub-courts of a court on a specific date
+      operationId: getCourtAvailability
+      parameters:
+        - name: courtId
+          in: path
+          required: true
+          description: Court UUID
+          schema:
+            type: string
+            format: uuid
+        - name: date
+          in: query
+          required: true
+          description: Date in YYYY-MM-DD format
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Court availability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailabilityResponse'
+        '404':
+          description: Court not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/search/autocomplete:
+    get:
+      tags:
+        - Search
+      summary: Autocomplete suggestions
+      description: |
+        Get real-time autocomplete suggestions from Redis.
+        Supports Vietnamese diacritics - searches both accented and unaccented text.
+        Example: "cau giay" will match "Cầu Giấy"
+        
+        Use `includeDetails=true` to include address and geolocation coordinates in the response.
+      operationId: searchAutocomplete
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search prefix (minimum 2 characters)
+          schema:
+            type: string
+            minLength: 2
+        - name: limit
+          in: query
+          description: Maximum results
+          schema:
+            type: integer
+            default: 10
+            maximum: 20
+        - name: includeDetails
+          in: query
+          description: Include address and geolocation in response
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Autocomplete suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutocompleteResponse'
+              examples:
+                basic:
+                  summary: Basic response (default)
+                  value:
+                    success: true
+                    data:
+                      suggestions:
+                        - id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                          text: "Sân Cầu Lông Ngọc Khánh"
+                          score: 100
+                withDetails:
+                  summary: Response with details (includeDetails=true)
+                  value:
+                    success: true
+                    data:
+                      suggestions:
+                        - id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                          text: "Sân Cầu Lông Ngọc Khánh"
+                          score: 100
+                          address: "123 Ngọc Khánh, Phường Ngọc Khánh, Quận Ba Đình, Hà Nội"
+                          latitude: 21.0285
+                          longitude: 105.8542
+        '400':
+          description: Invalid query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/search/courts:
+    get:
+      tags:
+        - Search
+      summary: Full fuzzy search
+      description: |
+        Full fuzzy search using PostgreSQL pg_trgm.
+        Supports typo-tolerance and Vietnamese diacritics-insensitive search.
+      operationId: searchCourts
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query (minimum 2 characters)
+          schema:
+            type: string
+            minLength: 2
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page
+          schema:
+            type: integer
+            default: 10
+            maximum: 50
+        - name: minSimilarity
+          in: query
+          description: Minimum similarity threshold (0-1)
+          schema:
+            type: number
+            format: float
+            default: 0.3
+            minimum: 0
+            maximum: 1
+        - name: district
+          in: query
+          description: Filter by district name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchCourtListResponse'
+        '400':
+          description: Invalid query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/search/popular:
+    get:
+      tags:
+        - Search
+      summary: Get popular searches
+      description: Get trending/popular search queries
+      operationId: getPopularSearches
+      parameters:
+        - name: limit
+          in: query
+          description: Number of results
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Popular searches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PopularSearchesResponse'
+
+  /api/admin/search/reindex:
+    post:
+      tags:
+        - Admin
+      summary: Rebuild search index
+      description: Rebuild the Redis autocomplete index from the database
+      operationId: reindexSearch
+      responses:
+        '200':
+          description: Index rebuilt successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReindexResponse'
+
+  /api/admin/search/stats:
+    get:
+      tags:
+        - Admin
+      summary: Get search index statistics
+      description: Get statistics about the search index
+      operationId: getSearchStats
+      responses:
+        '200':
+          description: Search index statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchStatsResponse'
+
+  /api/bookings:
+    get:
+      tags:
+        - Bookings
+      summary: Get bookings by phone
+      description: Get all bookings for a phone number
+      operationId: getBookingsByPhone
+      parameters:
+        - name: phone
+          in: query
+          required: true
+          description: Phone number
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingListResponse'
+
+    post:
+      tags:
+        - Bookings
+      summary: Create a booking
+      description: Create a new court booking. Minimum duration is 1 hour, in 30-minute increments.
+      operationId: createBooking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBookingRequest'
+      responses:
+        '201':
+          description: Booking created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Sub-court not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Time slot already booked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bookings/{id}:
+    get:
+      tags:
+        - Bookings
+      summary: Get booking by ID
+      description: Get a specific booking by its UUID
+      operationId: getBookingById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Booking UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingResponse'
+        '404':
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Bookings
+      summary: Cancel a booking
+      description: Cancel an existing booking
+      operationId: cancelBooking
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Booking UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingResponse'
+        '400':
+          description: Booking already cancelled or completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bookings/{bookingId}/payment:
+    get:
+      tags:
+        - Bookings
+      summary: Get payment for booking
+      description: Get payment information for a specific booking
+      operationId: getBookingPayment
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          description: Booking UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '404':
+          description: Booking or payment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/payments/create:
+    post:
+      tags:
+        - Payments
+      summary: Create a payment
+      description: |
+        Create a ZaloPay payment order for a booking.
+        Returns QR code image and WebSocket URL for real-time notifications.
+        The time slot is locked in Redis for 10 minutes.
+      operationId: createPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+      responses:
+        '201':
+          description: Payment created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatePaymentResponse'
+        '400':
+          description: Invalid booking status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Time slot is being reserved by another user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/payments/callback:
+    post:
+      tags:
+        - Payments
+      summary: ZaloPay callback (webhook)
+      description: |
+        Webhook endpoint called by ZaloPay after payment completion.
+        **Do not call this endpoint directly.**
+      operationId: paymentCallback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ZaloPayCallbackRequest'
+      responses:
+        '200':
+          description: Callback processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZaloPayCallbackResponse'
+
+  /api/payments/{id}:
+    get:
+      tags:
+        - Payments
+      summary: Get payment by ID
+      description: Get payment details with associated booking information
+      operationId: getPaymentById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Payment UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentWithBookingResponse'
+        '404':
+          description: Payment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/payments/{id}/status:
+    get:
+      tags:
+        - Payments
+      summary: Query payment status
+      description: Query the latest payment status from ZaloPay and sync with local database
+      operationId: queryPaymentStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Payment UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '404':
+          description: Payment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/map-tiles/{z}/{x}/{y}.pbf:
+    get:
+      tags:
+        - Map Tiles
+      summary: Get vector tile
+      description: Get a vector tile (MVT format) for rendering courts on a map
+      operationId: getVectorTile
+      parameters:
+        - name: z
+          in: path
+          required: true
+          description: Zoom level (0-22)
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 22
+        - name: x
+          in: path
+          required: true
+          description: Tile X coordinate
+          schema:
+            type: integer
+        - name: y
+          in: path
+          required: true
+          description: Tile Y coordinate
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Vector tile data
+          content:
+            application/vnd.mapbox-vector-tile:
+              schema:
+                type: string
+                format: binary
+        '502':
+          description: Tile server unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    # Common Response Schemas
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+              example: Error description
+
+    SuccessMessageResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                message:
+                  type: string
+
+    PaginationMeta:
+      type: object
+      properties:
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            totalPages:
+              type: integer
+            hasNext:
+              type: boolean
+            hasPrev:
+              type: boolean
+
+    # Court Schemas
+    Court:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        phoneNumbers:
+          type: array
+          items:
+            type: string
+        addressStreet:
+          type: string
+          nullable: true
+        addressWard:
+          type: string
+          nullable: true
+        addressDistrict:
+          type: string
+          nullable: true
+        addressCity:
+          type: string
+          default: Hà Nội
+        details:
+          $ref: '#/components/schemas/CourtDetails'
+        openingHours:
+          $ref: '#/components/schemas/OpeningHours'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CourtDetails:
+      type: object
+      properties:
+        amenities:
+          type: array
+          items:
+            type: string
+        payments:
+          type: array
+          items:
+            type: string
+        serviceOptions:
+          type: array
+          items:
+            type: string
+        highlights:
+          type: array
+          items:
+            type: string
+
+    OpeningHours:
+      type: object
+      properties:
+        mon:
+          type: string
+          example: '06:00-22:00'
+        tue:
+          type: string
+        wed:
+          type: string
+        thu:
+          type: string
+        fri:
+          type: string
+        sat:
+          type: string
+        sun:
+          type: string
+
+    CourtLocation:
+      type: object
+      properties:
+        latitude:
+          type: number
+          format: float
+        longitude:
+          type: number
+          format: float
+
+    CreateCourtRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        phoneNumbers:
+          type: array
+          items:
+            type: string
+        addressStreet:
+          type: string
+        addressWard:
+          type: string
+        addressDistrict:
+          type: string
+        addressCity:
+          type: string
+        details:
+          $ref: '#/components/schemas/CourtDetails'
+        openingHours:
+          $ref: '#/components/schemas/OpeningHours'
+        location:
+          $ref: '#/components/schemas/CourtLocation'
+
+    UpdateCourtRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        phoneNumbers:
+          type: array
+          items:
+            type: string
+        addressStreet:
+          type: string
+        addressWard:
+          type: string
+        addressDistrict:
+          type: string
+        addressCity:
+          type: string
+        details:
+          $ref: '#/components/schemas/CourtDetails'
+        openingHours:
+          $ref: '#/components/schemas/OpeningHours'
+        location:
+          $ref: '#/components/schemas/CourtLocation'
+
+    CourtResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/Court'
+
+    CourtListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Court'
+            meta:
+              $ref: '#/components/schemas/PaginationMeta'
+
+    NearbyCourtListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/Court'
+                  - type: object
+                    properties:
+                      distance:
+                        type: number
+                        format: float
+                        description: Distance in meters
+
+    # Search Schemas
+    AutocompleteSuggestion:
+      type: object
+      required:
+        - id
+        - text
+        - score
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Court UUID
+        text:
+          type: string
+          description: Court name
+        score:
+          type: number
+          description: Relevance score
+        address:
+          type: string
+          description: Combined address (only when includeDetails=true)
+          example: "123 Ngọc Khánh, Phường Ngọc Khánh, Quận Ba Đình, Hà Nội"
+        latitude:
+          type: number
+          format: double
+          description: Latitude coordinate (only when includeDetails=true)
+          example: 21.0285
+        longitude:
+          type: number
+          format: double
+          description: Longitude coordinate (only when includeDetails=true)
+          example: 105.8542
+
+    AutocompleteResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                suggestions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AutocompleteSuggestion'
+
+    SearchCourtResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        addressDistrict:
+          type: string
+          nullable: true
+        addressCity:
+          type: string
+          nullable: true
+        addressWard:
+          type: string
+          nullable: true
+        addressStreet:
+          type: string
+          nullable: true
+        nameScore:
+          type: number
+          format: float
+          description: Similarity score for name match (0-1)
+        districtScore:
+          type: number
+          format: float
+          description: Similarity score for district match (0-1)
+
+    SearchCourtListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/SearchCourtResult'
+            meta:
+              $ref: '#/components/schemas/PaginationMeta'
+
+    PopularSearchesResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                searches:
+                  type: array
+                  items:
+                    type: string
+
+    ReindexResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                message:
+                  type: string
+                indexed:
+                  type: integer
+                durationMs:
+                  type: integer
+
+    SearchStatsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                autocompleteCount:
+                  type: integer
+                courtsCount:
+                  type: integer
+
+    # Availability Schemas
+    TimeSlot:
+      type: object
+      properties:
+        startTime:
+          type: string
+          example: '06:00'
+        endTime:
+          type: string
+          example: '06:30'
+        isAvailable:
+          type: boolean
+        price:
+          type: integer
+          description: Price in VND for the 30-minute slot
+
+    SubCourtAvailability:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        isActive:
+          type: boolean
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimeSlot'
+
+    AvailabilityData:
+      type: object
+      properties:
+        courtId:
+          type: string
+          format: uuid
+        courtName:
+          type: string
+        date:
+          type: string
+          format: date
+        dayType:
+          type: string
+          enum: [weekday, weekend, holiday]
+        openingTime:
+          type: string
+        closingTime:
+          type: string
+        subCourts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubCourtAvailability'
+
+    AvailabilityResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/AvailabilityData'
+
+    # Booking Schemas
+    CreateBookingRequest:
+      type: object
+      required:
+        - subCourtId
+        - guestName
+        - guestPhone
+        - date
+        - startTime
+        - endTime
+      properties:
+        subCourtId:
+          type: string
+          format: uuid
+        guestName:
+          type: string
+        guestPhone:
+          type: string
+        guestEmail:
+          type: string
+        date:
+          type: string
+          format: date
+        startTime:
+          type: string
+          example: '10:00'
+        endTime:
+          type: string
+          example: '12:00'
+        notes:
+          type: string
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        subCourtId:
+          type: string
+          format: uuid
+        subCourtName:
+          type: string
+        courtId:
+          type: string
+          format: uuid
+        courtName:
+          type: string
+        guestName:
+          type: string
+        guestPhone:
+          type: string
+        guestEmail:
+          type: string
+          nullable: true
+        date:
+          type: string
+          format: date
+        startTime:
+          type: string
+        endTime:
+          type: string
+        totalPrice:
+          type: integer
+          description: Total price in VND
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled, completed]
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    BookingResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/Booking'
+
+    BookingListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Booking'
+
+    # Payment Schemas
+    CreatePaymentRequest:
+      type: object
+      required:
+        - bookingId
+      properties:
+        bookingId:
+          type: string
+          format: uuid
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        bookingId:
+          type: string
+          format: uuid
+        appTransId:
+          type: string
+          description: ZaloPay transaction ID (format yymmdd_xxx)
+        zpTransId:
+          type: string
+          nullable: true
+          description: ZaloPay's internal transaction ID
+        amount:
+          type: integer
+          description: Amount in VND
+        status:
+          type: string
+          enum: [pending, success, failed, expired]
+        orderUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    QRCode:
+      type: object
+      properties:
+        base64:
+          type: string
+          description: Full data URL for HTML img src
+        rawBase64:
+          type: string
+          description: Raw base64 for Flutter Image.memory()
+
+    CreatePaymentResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                payment:
+                  $ref: '#/components/schemas/Payment'
+                orderUrl:
+                  type: string
+                qrCode:
+                  $ref: '#/components/schemas/QRCode'
+                zpTransToken:
+                  type: string
+                  description: Token for ZaloPay SDK
+                expireAt:
+                  type: string
+                  format: date-time
+                  description: When slot lock expires
+                wsSubscribeUrl:
+                  type: string
+                  description: WebSocket URL for real-time notifications
+
+    PaymentResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/Payment'
+
+    PaymentWithBookingResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              allOf:
+                - $ref: '#/components/schemas/Payment'
+                - type: object
+                  properties:
+                    booking:
+                      $ref: '#/components/schemas/Booking'
+
+    ZaloPayCallbackRequest:
+      type: object
+      properties:
+        data:
+          type: string
+          description: JSON string with payment data
+        mac:
+          type: string
+          description: HMAC signature
+        type:
+          type: integer
+          description: 1 = payment success
+
+    ZaloPayCallbackResponse:
+      type: object
+      properties:
+        return_code:
+          type: integer
+        return_message:
+          type: string
+
