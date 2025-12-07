@@ -6,4 +6,6 @@ export * from './redis.service.js';
 export * from './qrcode.service.js';
 export * from './websocket.service.js';
 export * from './search.service.js';
+export * from './firebase.service.js';
+export * from './user.service.js';
 

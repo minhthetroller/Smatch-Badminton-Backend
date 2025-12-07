@@ -32,6 +32,7 @@ class RedisService {
         host: config.redis.host,
         port: config.redis.port,
         password: config.redis.password,
+        tls: config.redis.tlsEnabled ? {} : undefined,
         retryStrategy: (times: number) => {
           if (times > 3) {
             console.error('Redis connection failed after 3 retries');

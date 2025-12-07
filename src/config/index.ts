@@ -13,6 +13,7 @@ export const config = {
     host: process.env.REDIS_HOST || 'localhost',
     port: Number(process.env.REDIS_PORT) || 6379,
     password: process.env.REDIS_PASSWORD || undefined,
+    tlsEnabled: process.env.REDIS_TLS_ENABLED === 'true',
   },
   zalopay: {
     appId: process.env.ZALOPAY_APP_ID || '',
@@ -24,4 +25,11 @@ export const config = {
   payment: {
     slotLockTtlSeconds: Number(process.env.SLOT_LOCK_TTL_SECONDS) || 600, // 10 minutes
   },
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID || '',
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
+    privateKey: process.env.FIREBASE_PRIVATE_KEY || '',
+  },
 } as const;
+
+export { initializeFirebase, getFirebaseAuth, isFirebaseConfigured } from './firebase.js';

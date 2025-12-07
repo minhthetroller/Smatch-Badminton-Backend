@@ -115,7 +115,7 @@ model PricingRule {
 model Booking {
   id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
   subCourtId String   @map("sub_court_id") @db.Uuid
-  userId     String?  @map("user_id") @db.Uuid // NULL for guest, future FK to users
+  userId     String?  @map("user_id") @db.Uuid // FK to users table
   guestName  String?  @map("guest_name") @db.VarChar(255)
   guestPhone String?  @map("guest_phone") @db.VarChar(20)
   guestEmail String?  @map("guest_email") @db.VarChar(255)
@@ -131,10 +131,12 @@ model Booking {
 
   /// RELATIONS
   subCourt SubCourt  @relation("SubCourtBookings", fields: [subCourtId], references: [id], onDelete: Cascade)
+  user     User?     @relation("UserBookings", fields: [userId], references: [id], onDelete: SetNull)
   payments Payment[] @relation("BookingPayments")
 
   @@index([subCourtId, date, status], map: "idx_bookings_sub_court_date")
   @@index([date, startTime, endTime], map: "idx_bookings_date_range")
+  @@index([userId], map: "idx_bookings_user_id")
   @@map("bookings")
 }
 
@@ -172,4 +174,41 @@ model Holiday {
 
   @@index([date], map: "idx_holidays_date")
   @@map("holidays")
+}
+
+/// User - Store user authentication and profile information
+model User {
+  id          String  @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  firebaseUid String  @unique @map("firebase_uid") @db.VarChar(128)
+
+  /// AUTHENTICATION
+  email       String? @unique @db.VarChar(255)
+  username    String? @unique @db.VarChar(50)
+  provider    String  @db.VarChar(50) // google, facebook, password, anonymous
+  isAnonymous Boolean @default(false) @map("is_anonymous")
+
+  /// PERSONAL INFORMATION
+  firstName   String? @map("first_name") @db.VarChar(100)
+  lastName    String? @map("last_name") @db.VarChar(100)
+  gender      String? @db.VarChar(20) // male, female, other, prefer_not_to_say
+  phoneNumber String? @map("phone_number") @db.VarChar(20)
+  photoUrl    String? @map("photo_url") @db.Text
+
+  /// ADDRESS (Optional, split fields like Court)
+  addressStreet   String? @map("address_street") @db.VarChar(255)
+  addressWard     String? @map("address_ward") @db.VarChar(100)
+  addressDistrict String? @map("address_district") @db.VarChar(100)
+  addressCity     String? @default("Hà Nội") @map("address_city") @db.VarChar(100)
+
+  /// METADATA
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  /// RELATIONS
+  bookings Booking[] @relation("UserBookings")
+
+  @@index([firebaseUid], map: "idx_users_firebase_uid")
+  @@index([email], map: "idx_users_email")
+  @@index([username], map: "idx_users_username")
+  @@map("users")
 }
