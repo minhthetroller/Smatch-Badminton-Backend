@@ -53,11 +53,12 @@ export class AvailabilityService {
         : 'weekday';
 
     // Fetch all required data in parallel
-    const [subCourts, bookings, pricingRules, closures] = await Promise.all([
+    const [subCourts, bookings, pricingRules, closures, holidayMultiplier] = await Promise.all([
       availabilityRepository.getSubCourtsByCourtId(courtId),
       availabilityRepository.getBookingsByCourtAndDate(courtId, date),
       availabilityRepository.getPricingRulesByCourtId(courtId),
       availabilityRepository.getClosuresByCourtAndDate(courtId, date),
+      availabilityRepository.getHolidayMultiplier(date),
     ]);
 
     // Group bookings and closures by sub-court
@@ -75,7 +76,8 @@ export class AvailabilityService {
         subCourtBookings,
         subCourtClosures,
         pricingRules,
-        dayType
+        dayType,
+        holidayMultiplier
       );
 
       return {
@@ -148,7 +150,10 @@ export class AvailabilityService {
 
     // Calculate total price
     const dateObj = new Date(data.date);
-    const isHoliday = await availabilityRepository.isHoliday(data.date);
+    const [isHoliday, holidayMultiplier] = await Promise.all([
+      availabilityRepository.isHoliday(data.date),
+      availabilityRepository.getHolidayMultiplier(data.date),
+    ]);
     const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
     const dayType: 'holiday' | 'weekend' | 'weekday' = isHoliday 
       ? 'holiday' 
@@ -161,7 +166,8 @@ export class AvailabilityService {
       data.startTime,
       data.endTime,
       pricingRules,
-      dayType
+      dayType,
+      holidayMultiplier
     );
 
     // Create booking
@@ -248,7 +254,8 @@ export class AvailabilityService {
     bookings: RawBooking[],
     closures: RawClosure[],
     pricingRules: RawPricingRule[],
-    dayType: 'weekday' | 'weekend' | 'holiday'
+    dayType: 'weekday' | 'weekend' | 'holiday',
+    holidayMultiplier: number = 1.0
   ): TimeSlot[] {
     const slots: TimeSlot[] = [];
     let currentTime = openingTime;
@@ -271,8 +278,8 @@ export class AvailabilityService {
         return this.isTimeOverlapping(currentTime, nextTime, closure.start_time, closure.end_time);
       });
 
-      // Get price for this time slot
-      const price = this.getPriceForSlot(currentTime, pricingRules, dayType);
+      // Get price for this time slot (base price × holiday multiplier)
+      const price = this.getPriceForSlot(currentTime, pricingRules, dayType, holidayMultiplier);
 
       slots.push({
         startTime: currentTime,
@@ -289,11 +296,13 @@ export class AvailabilityService {
 
   /**
    * Get price for a specific time slot
+   * Applies holiday multiplier to the base price
    */
   private getPriceForSlot(
     time: string,
     pricingRules: RawPricingRule[],
-    dayType: 'weekday' | 'weekend' | 'holiday'
+    dayType: 'weekday' | 'weekend' | 'holiday',
+    holidayMultiplier: number = 1.0
   ): number {
     // Find matching pricing rule for the day type and time
     const rule = pricingRules.find(r => 
@@ -303,24 +312,33 @@ export class AvailabilityService {
       time < r.end_time
     );
 
-    // Return hourly rate divided by 2 for 30-minute slot
-    return rule ? Math.round(rule.price_per_hour / 2) : 0;
+    if (!rule) {
+      return 0;
+    }
+
+    // Calculate base price for 30-minute slot (hourly rate / 2)
+    const basePrice = rule.price_per_hour / 2;
+    
+    // Apply holiday multiplier and round to nearest integer
+    return Math.round(basePrice * holidayMultiplier);
   }
 
   /**
    * Calculate total price for a booking
+   * Applies holiday multiplier to each slot price
    */
   private calculateTotalPrice(
     startTime: string,
     endTime: string,
     pricingRules: RawPricingRule[],
-    dayType: 'weekday' | 'weekend' | 'holiday'
+    dayType: 'weekday' | 'weekend' | 'holiday',
+    holidayMultiplier: number = 1.0
   ): number {
     let total = 0;
     let currentTime = startTime;
 
     while (currentTime < endTime) {
-      const price = this.getPriceForSlot(currentTime, pricingRules, dayType);
+      const price = this.getPriceForSlot(currentTime, pricingRules, dayType, holidayMultiplier);
       total += price;
       currentTime = this.addMinutes(currentTime, 30);
     }
