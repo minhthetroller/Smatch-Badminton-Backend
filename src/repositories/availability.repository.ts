@@ -151,12 +151,14 @@ export class AvailabilityRepository {
     const result = await prisma.$queryRaw<{ id: string }[]>`
       INSERT INTO bookings (
         sub_court_id, guest_name, guest_phone, guest_email,
+        user_id,
         date, start_time, end_time, total_price, status, notes
       ) VALUES (
         ${data.subCourtId}::uuid,
         ${data.guestName},
         ${data.guestPhone},
         ${data.guestEmail ?? null},
+        ${data.userId ?? null}::uuid,
         ${data.date}::date,
         ${data.startTime}::time,
         ${data.endTime}::time,

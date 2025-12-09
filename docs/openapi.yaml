@@ -834,8 +834,13 @@ paths:
       tags:
         - Bookings
       summary: Create a booking
-      description: Create a new court booking. Minimum duration is 1 hour, in 30-minute increments.
+      description: |
+        Create a new court booking. Minimum duration is 1 hour, in 30-minute increments.
+        Requires an authenticated Firebase user (registered or anonymous). The `userId`
+        is taken from the Bearer token and not provided in the request body.
       operationId: createBooking
+      security:
+        - BearerAuth: []
       requestBody:
         required: true
         content:

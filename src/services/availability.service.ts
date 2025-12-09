@@ -104,6 +104,10 @@ export class AvailabilityService {
    * Create a new booking
    */
   async createBooking(data: CreateBookingDto): Promise<BookingResponse> {
+    if (!data.userId) {
+      throw new BadRequestError('User context is required to create a booking');
+    }
+
     // Validate date and time formats
     if (!this.isValidDateFormat(data.date)) {
       throw new BadRequestError('Invalid date format. Use YYYY-MM-DD');

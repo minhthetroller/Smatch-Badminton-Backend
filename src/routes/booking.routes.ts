@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { availabilityController, paymentController } from '../controllers/index.js';
+import { requireAuth } from '../middlewares/index.js';
 
 const router = Router();
 
@@ -12,8 +13,8 @@ router.get('/', (req, res, next) => availabilityController.getBookingsByPhone(re
 router.get('/:id', (req, res, next) => availabilityController.getBookingById(req, res, next));
 
 // POST /bookings
-// Create a new booking
-router.post('/', (req, res, next) => availabilityController.createBooking(req, res, next));
+// Create a new booking (requires authenticated user - registered or anonymous)
+router.post('/', requireAuth, (req, res, next) => availabilityController.createBooking(req, res, next));
 
 // DELETE /bookings/:id
 // Cancel a booking

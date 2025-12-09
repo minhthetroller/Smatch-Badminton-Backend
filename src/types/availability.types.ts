@@ -40,6 +40,7 @@ export interface CreateBookingDto {
   guestName: string;
   guestPhone: string;
   guestEmail?: string;
+  userId?: string;
   date: string;      // "YYYY-MM-DD"
   startTime: string; // "HH:mm"
   endTime: string;   // "HH:mm"

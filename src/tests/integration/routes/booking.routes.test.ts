@@ -60,7 +60,9 @@ class TestBookingController {
 
   async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const booking = await this.service.createBooking(req.body);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const userId = (req as any).user?.id as string | undefined;
+      const booking = await this.service.createBooking({ ...req.body, userId });
       sendSuccess(res, booking, 201);
     } catch (error) {
       next(error);
@@ -97,12 +99,25 @@ class TestAvailabilityController {
   }
 }
 
+// Fake auth middleware to simulate authenticated user
+function fakeAuth(req: Request, _res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    _res.status(401).json({ success: false, error: { message: 'Unauthorized' } });
+    return;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (req as any).user = { id: 'test-user-id' };
+  next();
+}
+
 // Create test routes
 function createTestBookingRoutes(controller: TestBookingController): Router {
   const router = Router();
   router.get('/', (req, res, next) => controller.getByPhone(req, res, next));
   router.get('/:id', (req, res, next) => controller.getById(req, res, next));
-  router.post('/', (req, res, next) => controller.create(req, res, next));
+  router.post('/', fakeAuth, (req, res, next) => controller.create(req, res, next));
   router.delete('/:id', (req, res, next) => controller.cancel(req, res, next));
   return router;
 }
@@ -218,10 +233,22 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send(createBookingDto)
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(201);
 
       expect(response.body.success).toBe(true);
       expect(response.body.data.status).toBe('pending');
+    });
+
+    it('should return 401 when missing auth header', async () => {
+      const response = await request(app)
+        .post('/api/bookings')
+        .send(createBookingDto)
+        .set('Content-Type', 'application/json')
+        .expect(401);
+
+      expect(response.body.success).toBe(false);
+      expect(mockAvailabilityService.createBooking).not.toHaveBeenCalled();
     });
 
     it('should return 400 for invalid date format', async () => {
@@ -233,6 +260,7 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send(bookingWithInvalidDate)
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(400);
 
       expect(response.body.success).toBe(false);
@@ -248,6 +276,7 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send(bookingWithInvalidTime)
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(400);
 
       expect(response.body.success).toBe(false);
@@ -262,6 +291,7 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send(bookingWithEndBeforeStart)
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(400);
 
       expect(response.body.success).toBe(false);
@@ -276,6 +306,7 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send(bookingWithShortDuration)
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(400);
 
       expect(response.body.success).toBe(false);
@@ -290,6 +321,7 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send({ ...createBookingDto, subCourtId: nonExistentBookingId })
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(404);
 
       expect(response.body.success).toBe(false);
@@ -304,6 +336,7 @@ describe('Booking Routes Integration Tests', () => {
         .post('/api/bookings')
         .send(createBookingDto)
         .set('Content-Type', 'application/json')
+        .set('Authorization', 'Bearer test-token')
         .expect(409);
 
       expect(response.body.success).toBe(false);
