@@ -32,7 +32,7 @@ export interface AvailabilityQueryParams {
 }
 
 // Booking status
-export type BookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed';
+export type BookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'failed';
 
 // Create booking DTO
 export interface CreateBookingDto {

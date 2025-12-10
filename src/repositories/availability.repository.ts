@@ -23,7 +23,7 @@ export class AvailabilityRepository {
 
   /**
    * Get all bookings for a court's sub-courts on a specific date
-   * Only returns non-cancelled bookings
+   * Only returns confirmed bookings (not pending, cancelled, or failed)
    */
   async getBookingsByCourtAndDate(courtId: string, date: string): Promise<RawBooking[]> {
     return prisma.$queryRaw<RawBooking[]>`
@@ -35,7 +35,7 @@ export class AvailabilityRepository {
       JOIN sub_courts sc ON b.sub_court_id = sc.id
       WHERE sc.court_id = ${courtId}::uuid 
         AND b.date = ${date}::date
-        AND b.status != 'cancelled'
+        AND b.status = 'confirmed'
       ORDER BY b.start_time
     `;
   }
@@ -118,6 +118,7 @@ export class AvailabilityRepository {
 
   /**
    * Check for overlapping bookings
+   * Only confirmed bookings should block a time slot
    */
   async hasOverlappingBooking(
     subCourtId: string,
@@ -135,7 +136,7 @@ export class AvailabilityRepository {
       FROM bookings
       WHERE sub_court_id = ${subCourtId}::uuid
         AND date = ${date}::date
-        AND status != 'cancelled'
+        AND status = 'confirmed'
         AND (
           (start_time < ${endTime}::time AND end_time > ${startTime}::time)
         )

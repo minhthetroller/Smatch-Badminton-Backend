@@ -123,7 +123,7 @@ model Booking {
   startTime  DateTime @map("start_time") @db.Time()
   endTime    DateTime @map("end_time") @db.Time()
   totalPrice Int      @map("total_price") // Calculated from pricing_rules
-  status     String   @default("pending") @db.VarChar(20) // pending, confirmed, cancelled, completed
+  status     String   @default("pending") @db.VarChar(20) // pending, confirmed, cancelled, completed, failed
   notes      String?  @db.Text
   groupId    String?  @map("group_id") @db.Uuid
 
