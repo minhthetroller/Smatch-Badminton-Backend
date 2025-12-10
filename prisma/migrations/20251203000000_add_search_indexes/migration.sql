@@ -4,6 +4,9 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- Enable unaccent extension for Vietnamese diacritics-insensitive search
 CREATE EXTENSION IF NOT EXISTS unaccent;
 
+-- Make unaccent immutable so it can be used in generated columns
+ALTER FUNCTION unaccent(text) IMMUTABLE;
+
 -- Add composite search column for full-text search performance
 -- Uses unaccent for Vietnamese diacritics-insensitive search
 ALTER TABLE courts ADD COLUMN IF NOT EXISTS search_vector tsvector

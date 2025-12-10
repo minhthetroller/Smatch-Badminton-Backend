@@ -125,6 +125,7 @@ model Booking {
   totalPrice Int      @map("total_price") // Calculated from pricing_rules
   status     String   @default("pending") @db.VarChar(20) // pending, confirmed, cancelled, completed
   notes      String?  @db.Text
+  groupId    String?  @map("group_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
@@ -137,6 +138,7 @@ model Booking {
   @@index([subCourtId, date, status], map: "idx_bookings_sub_court_date")
   @@index([date, startTime, endTime], map: "idx_bookings_date_range")
   @@index([userId], map: "idx_bookings_user_id")
+  @@index([groupId], map: "idx_bookings_group_id")
   @@map("bookings")
 }
 

@@ -46,6 +46,47 @@ export class PaymentService {
       throw new BadRequestError(`Cannot create payment for booking with status: ${booking.status}`);
     }
 
+    // Determine bookings to pay (single or group)
+    let bookingsToPay: {
+      id: string;
+      subCourtId: string;
+      date: Date;
+      startTime: string;
+      endTime: string;
+      totalPrice: number;
+      status: string;
+      groupId: string | null;
+    }[] = [];
+
+    bookingsToPay.push({
+      id: booking.id,
+      subCourtId: booking.sub_court_id,
+      date: booking.date,
+      startTime: booking.start_time,
+      endTime: booking.end_time,
+      totalPrice: booking.total_price,
+      status: booking.status,
+      groupId: booking.group_id,
+    });
+
+    if (booking.group_id) {
+      const groupBookings = await availabilityRepository.getBookingsByGroupId(booking.group_id);
+      if (groupBookings.length > 0) {
+        bookingsToPay = groupBookings.map(b => ({
+          id: b.id,
+          subCourtId: b.sub_court_id,
+          date: new Date(b.date),
+          startTime: b.start_time,
+          endTime: b.end_time,
+          totalPrice: b.total_price,
+          status: b.status,
+          groupId: b.group_id,
+        }));
+      }
+    }
+
+    const totalAmount = bookingsToPay.reduce((sum, b) => sum + b.totalPrice, 0);
+
     // Check if there's already a successful payment
     const hasSuccessful = await paymentRepository.hasSuccessfulPayment(data.bookingId);
     if (hasSuccessful) {
@@ -83,29 +124,19 @@ export class PaymentService {
       };
     }
 
-    // Acquire Redis lock for the time slot
-    const dateStr = booking.date.toISOString().split('T')[0]!;
-    const lockAcquired = await redisService.acquireSlotLock(
-      booking.sub_court_id,
-      dateStr,
-      booking.start_time,
-      booking.end_time,
-      data.bookingId
-    );
+    // Acquire Redis locks for all slots
+    const slotsToLock = bookingsToPay.map(b => ({
+      subCourtId: b.subCourtId,
+      date: b.date.toISOString().split('T')[0]!,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      bookingId: b.id
+    }));
+
+    const lockAcquired = await redisService.acquireSlotLocks(slotsToLock);
 
     if (!lockAcquired) {
-      // Check if we already hold the lock
-      const lockHolder = await redisService.getSlotLockHolder(
-        booking.sub_court_id,
-        dateStr,
-        booking.start_time,
-        booking.end_time
-      );
-
-      if (lockHolder !== data.bookingId) {
-        throw new ConflictError('Time slot is currently being reserved by another user');
-      }
-      // We already hold the lock, continue
+      throw new ConflictError('One or more time slots are no longer available');
     }
 
     // Generate app_trans_id for ZaloPay
@@ -121,19 +152,23 @@ export class PaymentService {
           {
             bookingId: data.bookingId,
             appTransId,
-            amount: booking.total_price,
+            amount: totalAmount,
           },
           tx
         );
 
         // Create ZaloPay order
+        const description = bookingsToPay.length > 1 
+          ? `Arc Badminton - ${bookingsToPay.length} bookings`
+          : `Arc Badminton - ${booking.court_name} - ${booking.sub_court_name} - ${booking.date.toISOString().split('T')[0]}`;
+
         const zaloPayResponse = await zaloPayService.createOrder({
           bookingId: data.bookingId,
           appTransId,
-          amount: booking.total_price,
+          amount: totalAmount,
           guestName: booking.guest_name || 'Guest',
           guestPhone: booking.guest_phone || '',
-          description: `Arc Badminton - ${booking.court_name} - ${booking.sub_court_name} - ${dateStr}`,
+          description,
         });
 
         // Check ZaloPay response
@@ -158,14 +193,8 @@ export class PaymentService {
         return updatedPayment;
       });
     } catch (error) {
-      // Release Redis lock on failure
-      await redisService.releaseSlotLock(
-        booking.sub_court_id,
-        dateStr,
-        booking.start_time,
-        booking.end_time,
-        data.bookingId
-      );
+      // Release Redis locks on failure
+      await redisService.releaseSlotLocks(slotsToLock);
 
       // Re-throw the error
       if (error instanceof Error) {
@@ -261,21 +290,58 @@ export class PaymentService {
             updatedAt: new Date(),
           },
         });
+
+        // Update other bookings in group if any
+        const booking = await tx.booking.findUnique({ where: { id: payment.bookingId } }) as any;
+        if (booking?.groupId) {
+           await tx.booking.updateMany({
+             where: { groupId: booking.groupId } as any,
+             data: { status: 'confirmed', updatedAt: new Date() }
+           });
+        }
       });
 
       // Release Redis lock (payment completed)
-      const booking = payment.booking;
+      const booking = payment.booking as any;
       if (booking) {
-        const dateStr = booking.date.toISOString().split('T')[0]!;
-        const startTime = booking.startTime.toISOString().slice(11, 16);
-        const endTime = booking.endTime.toISOString().slice(11, 16);
-        await redisService.releaseSlotLock(
-          booking.subCourtId,
-          dateStr,
-          startTime,
-          endTime,
-          booking.id
-        );
+        let bookingsToRelease: {
+            id: string;
+            subCourtId: string;
+            date: Date;
+            startTime: string;
+            endTime: string;
+        }[] = [];
+
+        bookingsToRelease.push({
+            id: booking.id,
+            subCourtId: booking.subCourtId,
+            date: booking.date,
+            startTime: typeof booking.startTime === 'string' ? booking.startTime : booking.startTime.toISOString().slice(11, 16),
+            endTime: typeof booking.endTime === 'string' ? booking.endTime : booking.endTime.toISOString().slice(11, 16),
+        });
+
+        if (booking.groupId) {
+           const groupBookings = await availabilityRepository.getBookingsByGroupId(booking.groupId);
+           if (groupBookings.length > 0) {
+             bookingsToRelease = groupBookings.map(b => ({
+               id: b.id,
+               subCourtId: b.sub_court_id,
+               date: new Date(b.date),
+               startTime: b.start_time,
+               endTime: b.end_time,
+             }));
+           }
+        }
+
+        const slotsToRelease = bookingsToRelease.map(b => ({
+          subCourtId: b.subCourtId,
+          date: b.date.toISOString().split('T')[0]!,
+          startTime: b.startTime,
+          endTime: b.endTime,
+          bookingId: b.id
+        }));
+
+        await redisService.releaseSlotLocks(slotsToRelease);
       }
 
       // Notify connected clients via WebSocket
@@ -352,21 +418,58 @@ export class PaymentService {
               updatedAt: new Date(),
             },
           });
+
+          // Update group
+          const booking = await tx.booking.findUnique({ where: { id: payment.bookingId } }) as any;
+          if (booking?.groupId) {
+             await tx.booking.updateMany({
+               where: { groupId: booking.groupId } as any,
+               data: { status: 'confirmed', updatedAt: new Date() }
+             });
+          }
         });
 
         // Release Redis lock
         if (payment.booking) {
-          const booking = payment.booking;
-          const dateStr = booking.date.toISOString().split('T')[0]!;
-          const startTime = booking.startTime.toISOString().slice(11, 16);
-          const endTime = booking.endTime.toISOString().slice(11, 16);
-          await redisService.releaseSlotLock(
-            booking.subCourtId,
-            dateStr,
-            startTime,
-            endTime,
-            booking.id
-          );
+          const booking = payment.booking as any;
+          let bookingsToRelease: {
+              id: string;
+              subCourtId: string;
+              date: Date;
+              startTime: string;
+              endTime: string;
+          }[] = [];
+
+          bookingsToRelease.push({
+              id: booking.id,
+              subCourtId: booking.subCourtId,
+              date: booking.date,
+              startTime: typeof booking.startTime === 'string' ? booking.startTime : booking.startTime.toISOString().slice(11, 16),
+              endTime: typeof booking.endTime === 'string' ? booking.endTime : booking.endTime.toISOString().slice(11, 16),
+          });
+
+          if (booking.groupId) {
+             const groupBookings = await availabilityRepository.getBookingsByGroupId(booking.groupId);
+             if (groupBookings.length > 0) {
+               bookingsToRelease = groupBookings.map(b => ({
+                 id: b.id,
+                 subCourtId: b.sub_court_id,
+                 date: new Date(b.date),
+                 startTime: b.start_time,
+                 endTime: b.end_time,
+               }));
+             }
+          }
+
+          const slotsToRelease = bookingsToRelease.map(b => ({
+            subCourtId: b.subCourtId,
+            date: b.date.toISOString().split('T')[0]!,
+            startTime: b.startTime,
+            endTime: b.endTime,
+            bookingId: b.id
+          }));
+
+          await redisService.releaseSlotLocks(slotsToRelease);
         }
         break;
 
@@ -376,17 +479,45 @@ export class PaymentService {
 
         // Release Redis lock
         if (payment.booking) {
-          const booking = payment.booking;
-          const dateStr = booking.date.toISOString().split('T')[0]!;
-          const startTime = booking.startTime.toISOString().slice(11, 16);
-          const endTime = booking.endTime.toISOString().slice(11, 16);
-          await redisService.releaseSlotLock(
-            booking.subCourtId,
-            dateStr,
-            startTime,
-            endTime,
-            booking.id
-          );
+          const booking = payment.booking as any;
+          let bookingsToRelease: {
+              id: string;
+              subCourtId: string;
+              date: Date;
+              startTime: string;
+              endTime: string;
+          }[] = [];
+
+          bookingsToRelease.push({
+              id: booking.id,
+              subCourtId: booking.subCourtId,
+              date: booking.date,
+              startTime: typeof booking.startTime === 'string' ? booking.startTime : booking.startTime.toISOString().slice(11, 16),
+              endTime: typeof booking.endTime === 'string' ? booking.endTime : booking.endTime.toISOString().slice(11, 16),
+          });
+
+          if (booking.groupId) {
+             const groupBookings = await availabilityRepository.getBookingsByGroupId(booking.groupId);
+             if (groupBookings.length > 0) {
+               bookingsToRelease = groupBookings.map(b => ({
+                 id: b.id,
+                 subCourtId: b.sub_court_id,
+                 date: new Date(b.date),
+                 startTime: b.start_time,
+                 endTime: b.end_time,
+               }));
+             }
+          }
+
+          const slotsToRelease = bookingsToRelease.map(b => ({
+            subCourtId: b.subCourtId,
+            date: b.date.toISOString().split('T')[0]!,
+            startTime: b.startTime,
+            endTime: b.endTime,
+            bookingId: b.id
+          }));
+
+          await redisService.releaseSlotLocks(slotsToRelease);
         }
         break;
 

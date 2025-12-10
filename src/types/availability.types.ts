@@ -36,14 +36,20 @@ export type BookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed';
 
 // Create booking DTO
 export interface CreateBookingDto {
-  subCourtId: string;
+  subCourtId?: string;
+  bookings?: {
+    subCourtId: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+  }[];
   guestName: string;
   guestPhone: string;
   guestEmail?: string;
   userId?: string;
-  date: string;      // "YYYY-MM-DD"
-  startTime: string; // "HH:mm"
-  endTime: string;   // "HH:mm"
+  date?: string;      // "YYYY-MM-DD"
+  startTime?: string; // "HH:mm"
+  endTime?: string;   // "HH:mm"
   notes?: string;
 }
 
@@ -94,6 +100,8 @@ export interface RawBooking {
   start_time: string;
   end_time: string;
   status: string;
+  total_price: number;
+  group_id: string | null;
 }
 
 // Raw sub-court from database

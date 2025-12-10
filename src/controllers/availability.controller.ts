@@ -35,8 +35,14 @@ export class AvailabilityController {
         ...req.body,
         userId: req.user?.id,
       };
-      const booking = await availabilityService.createBooking(data);
-      sendSuccess(res, booking, 201);
+      const bookings = await availabilityService.createBooking(data);
+      
+      // Backward compatibility: if request was single (no bookings array), return single object
+      if (!req.body.bookings && bookings.length === 1) {
+        sendSuccess(res, bookings[0], 201);
+      } else {
+        sendSuccess(res, bookings, 201);
+      }
     } catch (error) {
       next(error);
     }
