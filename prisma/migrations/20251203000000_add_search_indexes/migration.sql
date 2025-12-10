@@ -18,11 +18,20 @@ ALTER TABLE courts ADD COLUMN IF NOT EXISTS search_vector tsvector
 
 -- Add unaccented name column for faster Vietnamese search
 ALTER TABLE courts ADD COLUMN IF NOT EXISTS name_unaccent text
-  GENERATED ALWAYS AS (lower(unaccent(name))) STORED;
+  GENERATED ALWAYS AS (lower(immutable_unaccent(name))) STORED;
 
 -- Add unaccented district column for faster Vietnamese search  
 ALTER TABLE courts ADD COLUMN IF NOT EXISTS district_unaccent text
-  GENERATED ALWAYS AS (lower(unaccent(coalesce(address_district, '')))) STORED;
+  GENERATED ALWAYS AS (lower(immutable_unaccent(coalesce(address_district, '')))) STORED;
+
+-- Add composite search column for full-text search performance
+-- Uses immutable_unaccent for Vietnamese diacritics-insensitive search
+ALTER TABLE courts ADD COLUMN IF NOT EXISTS search_vector tsvector
+  GENERATED ALWAYS AS (
+    setweight(to_tsvector('simple', immutable_unaccent(coalesce(name, ''))), 'A') ||
+    setweight(to_tsvector('simple', immutable_unaccent(coalesce(address_district, ''))), 'B') ||
+    setweight(to_tsvector('simple', immutable_unaccent(coalesce(address_ward, ''))), 'C')
+  ) STORED;
 
 -- GIN index for trigram similarity (fuzzy search on name)
 CREATE INDEX IF NOT EXISTS idx_courts_name_trgm ON courts USING GIN (name gin_trgm_ops);
