@@ -1,5 +1,6 @@
 import { availabilityRepository, courtRepository } from '../repositories/index.js';
 import { NotFoundError, BadRequestError, ConflictError } from '../utils/errors.js';
+import { randomUUID } from 'crypto';
 import type {
   CourtAvailabilityResponse,
   SubCourtAvailability,
@@ -101,85 +102,120 @@ export class AvailabilityService {
   }
 
   /**
-   * Create a new booking
+   * Create a new booking (supports multiple sub-courts)
    */
-  async createBooking(data: CreateBookingDto): Promise<BookingResponse> {
-    // Validate date and time formats
-    if (!this.isValidDateFormat(data.date)) {
-      throw new BadRequestError('Invalid date format. Use YYYY-MM-DD');
-    }
-    if (!this.isValidTimeFormat(data.startTime) || !this.isValidTimeFormat(data.endTime)) {
-      throw new BadRequestError('Invalid time format. Use HH:mm');
+  async createBooking(data: CreateBookingDto): Promise<BookingResponse[]> {
+    if (!data.userId) {
+      throw new BadRequestError('User context is required to create a booking');
     }
 
-    // Validate time range
-    if (data.startTime >= data.endTime) {
-      throw new BadRequestError('Start time must be before end time');
+    // Normalize input
+    const bookingsToProcess = [];
+    if (data.bookings && data.bookings.length > 0) {
+      bookingsToProcess.push(...data.bookings);
+    } else if (data.subCourtId && data.date && data.startTime && data.endTime) {
+      bookingsToProcess.push({
+        subCourtId: data.subCourtId,
+        date: data.date,
+        startTime: data.startTime,
+        endTime: data.endTime
+      });
+    } else {
+      throw new BadRequestError('Invalid booking data: provide either bookings array or single booking details');
     }
 
-    // Validate minimum booking duration (1 hour)
-    const durationMinutes = this.getMinutesBetween(data.startTime, data.endTime);
-    if (durationMinutes < 60) {
-      throw new BadRequestError('Minimum booking duration is 1 hour');
+    const groupId = randomUUID();
+    const preparedBookings = [];
+
+    for (const item of bookingsToProcess) {
+      // Validate date and time formats
+      if (!this.isValidDateFormat(item.date)) {
+        throw new BadRequestError(`Invalid date format for ${item.date}. Use YYYY-MM-DD`);
+      }
+      if (!this.isValidTimeFormat(item.startTime) || !this.isValidTimeFormat(item.endTime)) {
+        throw new BadRequestError(`Invalid time format for ${item.startTime}-${item.endTime}. Use HH:mm`);
+      }
+
+      // Validate time range
+      if (item.startTime >= item.endTime) {
+        throw new BadRequestError(`Start time must be before end time for ${item.startTime}-${item.endTime}`);
+      }
+
+      // Validate minimum booking duration (1 hour)
+      const durationMinutes = this.getMinutesBetween(item.startTime, item.endTime);
+      if (durationMinutes < 60) {
+        throw new BadRequestError('Minimum booking duration is 1 hour');
+      }
+
+      // Validate 30-minute increment
+      if (durationMinutes % 30 !== 0) {
+        throw new BadRequestError('Booking duration must be in 30-minute increments');
+      }
+
+      // Get sub-court with court info
+      const subCourt = await availabilityRepository.getSubCourtWithCourt(item.subCourtId);
+      if (!subCourt) {
+        throw new NotFoundError(`Sub-court ${item.subCourtId} not found`);
+      }
+      if (!subCourt.is_active) {
+        throw new BadRequestError(`Sub-court ${subCourt.name} is not active`);
+      }
+
+      // Check for overlapping bookings
+      const hasOverlap = await availabilityRepository.hasOverlappingBooking(
+        item.subCourtId,
+        item.date,
+        item.startTime,
+        item.endTime
+      );
+      if (hasOverlap) {
+        throw new ConflictError(`Time slot ${item.startTime}-${item.endTime} for ${subCourt.name} is already booked`);
+      }
+
+      // Calculate total price
+      const dateObj = new Date(item.date);
+      const [isHoliday, holidayMultiplier] = await Promise.all([
+        availabilityRepository.isHoliday(item.date),
+        availabilityRepository.getHolidayMultiplier(item.date),
+      ]);
+      const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+      const dayType: 'holiday' | 'weekend' | 'weekday' = isHoliday 
+        ? 'holiday' 
+        : isWeekend 
+          ? 'weekend' 
+          : 'weekday';
+
+      const pricingRules = await availabilityRepository.getPricingRulesByCourtId(subCourt.court_id);
+      const totalPrice = this.calculateTotalPrice(
+        item.startTime,
+        item.endTime,
+        pricingRules,
+        dayType,
+        holidayMultiplier
+      );
+
+      preparedBookings.push({
+        subCourtId: item.subCourtId,
+        date: item.date,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        totalPrice
+      });
     }
 
-    // Validate 30-minute increment
-    if (durationMinutes % 30 !== 0) {
-      throw new BadRequestError('Booking duration must be in 30-minute increments');
-    }
-
-    // Get sub-court with court info
-    const subCourt = await availabilityRepository.getSubCourtWithCourt(data.subCourtId);
-    if (!subCourt) {
-      throw new NotFoundError('Sub-court not found');
-    }
-    if (!subCourt.is_active) {
-      throw new BadRequestError('Sub-court is not active');
-    }
-
-    // Check for overlapping bookings
-    const hasOverlap = await availabilityRepository.hasOverlappingBooking(
-      data.subCourtId,
-      data.date,
-      data.startTime,
-      data.endTime
-    );
-    if (hasOverlap) {
-      throw new ConflictError('Time slot is already booked');
-    }
-
-    // Calculate total price
-    const dateObj = new Date(data.date);
-    const [isHoliday, holidayMultiplier] = await Promise.all([
-      availabilityRepository.isHoliday(data.date),
-      availabilityRepository.getHolidayMultiplier(data.date),
-    ]);
-    const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
-    const dayType: 'holiday' | 'weekend' | 'weekday' = isHoliday 
-      ? 'holiday' 
-      : isWeekend 
-        ? 'weekend' 
-        : 'weekday';
-
-    const pricingRules = await availabilityRepository.getPricingRulesByCourtId(subCourt.court_id);
-    const totalPrice = this.calculateTotalPrice(
-      data.startTime,
-      data.endTime,
-      pricingRules,
-      dayType,
-      holidayMultiplier
-    );
-
-    // Create booking
-    const result = await availabilityRepository.createBooking(data, totalPrice);
+    // Create bookings
+    const createdIds = await availabilityRepository.createBookings(preparedBookings, {
+      guestName: data.guestName,
+      guestPhone: data.guestPhone,
+      guestEmail: data.guestEmail,
+      userId: data.userId,
+      notes: data.notes,
+      groupId
+    });
 
     // Get full booking details
-    const booking = await availabilityRepository.getBookingById(result.id);
-    if (!booking) {
-      throw new Error('Failed to retrieve created booking');
-    }
-
-    return this.formatBookingResponse(booking);
+    const responses = await Promise.all(createdIds.map(id => this.getBookingById(id)));
+    return responses;
   }
 
   /**

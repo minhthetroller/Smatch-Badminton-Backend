@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { availabilityService } from '../services/index.js';
 import { sendSuccess } from '../utils/response.js';
 import type { CreateBookingDto } from '../types/index.js';
+import type { AuthRequest } from '../middlewares/auth.middleware.js';
 
 export class AvailabilityController {
   /**
@@ -28,11 +29,20 @@ export class AvailabilityController {
    * POST /bookings
    * Create a new booking
    */
-  async createBooking(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async createBooking(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const data: CreateBookingDto = req.body;
-      const booking = await availabilityService.createBooking(data);
-      sendSuccess(res, booking, 201);
+      const data: CreateBookingDto = {
+        ...req.body,
+        userId: req.user?.id,
+      };
+      const bookings = await availabilityService.createBooking(data);
+      
+      // Backward compatibility: if request was single (no bookings array), return single object
+      if (!req.body.bookings && bookings.length === 1) {
+        sendSuccess(res, bookings[0], 201);
+      } else {
+        sendSuccess(res, bookings, 201);
+      }
     } catch (error) {
       next(error);
     }

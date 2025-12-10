@@ -14,6 +14,7 @@ Backend service for the Arc Badminton application, designed to manage badminton 
 - **Language**: TypeScript
 - **Database**: PostgreSQL with PostGIS extension
 - **ORM**: Prisma
+- **Authentication**: Firebase Admin SDK
 - **Infrastructure**: Docker & Docker Compose
 
 ## Getting Started
@@ -22,6 +23,36 @@ Backend service for the Arc Badminton application, designed to manage badminton 
 
 - Node.js 22+
 - Docker & Docker Compose
+
+### Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
+```env
+# Database
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/arc_badminton?schema=public"
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Firebase Admin SDK (required for authentication)
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+
+# ZaloPay (optional, for payments)
+ZALOPAY_APP_ID=
+ZALOPAY_KEY1=
+ZALOPAY_KEY2=
+ZALOPAY_ENDPOINT=https://sb-openapi.zalopay.vn
+ZALOPAY_CALLBACK_URL=
+```
+
+To get Firebase credentials:
+1. Go to Firebase Console > Project Settings > Service Accounts
+2. Click "Generate new private key"
+3. Copy the values to your `.env` file
 
 ### Installation
 

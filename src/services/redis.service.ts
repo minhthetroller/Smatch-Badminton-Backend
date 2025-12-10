@@ -32,6 +32,7 @@ class RedisService {
         host: config.redis.host,
         port: config.redis.port,
         password: config.redis.password,
+        tls: config.redis.tlsEnabled ? {} : undefined,
         retryStrategy: (times: number) => {
           if (times > 3) {
             console.error('Redis connection failed after 3 retries');
@@ -419,6 +420,57 @@ class RedisService {
       limit - 1
     );
     return results;
+  }
+
+  /**
+   * Acquire locks for multiple time slots
+   * Returns true if ALL locks acquired, false if ANY failed (and releases acquired ones)
+   */
+  async acquireSlotLocks(
+    slots: {
+      subCourtId: string;
+      date: string;
+      startTime: string;
+      endTime: string;
+      bookingId: string;
+    }[]
+  ): Promise<boolean> {
+    const acquiredKeys: string[] = [];
+    const client = this.getClient();
+    const ttl = config.payment.slotLockTtlSeconds;
+
+    for (const slot of slots) {
+      const key = this.buildSlotLockKey(slot.subCourtId, slot.date, slot.startTime, slot.endTime);
+      const result = await client.set(key, slot.bookingId, 'EX', ttl, 'NX');
+      
+      if (result === 'OK') {
+        acquiredKeys.push(key);
+      } else {
+        // Failed to acquire one, release all previously acquired
+        if (acquiredKeys.length > 0) {
+          await client.del(...acquiredKeys);
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Release multiple time slot locks
+   */
+  async releaseSlotLocks(
+    slots: {
+      subCourtId: string;
+      date: string;
+      startTime: string;
+      endTime: string;
+      bookingId: string;
+    }[]
+  ): Promise<void> {
+    await Promise.all(slots.map(slot => 
+      this.releaseSlotLock(slot.subCourtId, slot.date, slot.startTime, slot.endTime, slot.bookingId)
+    ));
   }
 
   // ============================================

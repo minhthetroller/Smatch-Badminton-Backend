@@ -24,6 +24,8 @@ servers:
 tags:
   - name: Health
     description: Health check endpoints
+  - name: Auth
+    description: User authentication and profile management (Firebase Auth)
   - name: Courts
     description: Court management operations
   - name: Search
@@ -38,6 +40,9 @@ tags:
     description: Vector map tiles
   - name: Admin
     description: Administrative operations
+
+security:
+  - BearerAuth: []
 
 paths:
   /health:
@@ -62,6 +67,350 @@ paths:
                     type: string
                     format: date-time
                     example: '2025-11-25T12:00:00.000Z'
+
+  # ==================== Auth Endpoints ====================
+
+  /api/auth/verify:
+    post:
+      tags:
+        - Auth
+      summary: Verify Firebase token
+      description: |
+        Verify Firebase ID token and create/get user.
+        Used for all login types: Google, Facebook, Email/Password.
+        Creates a new user if not exists, otherwise returns existing user.
+      operationId: verifyToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyTokenRequest'
+      responses:
+        '200':
+          description: User verified (existing user)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '201':
+          description: User created (new user)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/anonymous:
+    post:
+      tags:
+        - Auth
+      summary: Create anonymous user
+      description: |
+        Create or get anonymous user session.
+        Used for anonymous booking flow where users can book without registration.
+      operationId: createAnonymous
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAnonymousRequest'
+      responses:
+        '200':
+          description: Anonymous user retrieved (existing)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '201':
+          description: Anonymous user created (new)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /api/auth/convert:
+    post:
+      tags:
+        - Auth
+      summary: Convert anonymous to registered
+      description: |
+        Convert anonymous user to registered user.
+        Requires authenticated anonymous user.
+        All existing bookings will be preserved and linked to the new account.
+      operationId: convertAnonymous
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConvertAnonymousRequest'
+      responses:
+        '200':
+          description: User converted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConvertResponse'
+        '400':
+          description: User is not anonymous or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email or username already in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/me:
+    get:
+      tags:
+        - Auth
+      summary: Get current user profile
+      description: Get the authenticated user's profile information
+      operationId: getProfile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Auth
+      summary: Update user profile
+      description: Update the authenticated user's profile information
+      operationId: updateProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Username already taken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/me/bookings:
+    get:
+      tags:
+        - Auth
+      summary: Get user's booking history
+      description: |
+        Get paginated booking history for the authenticated user.
+        Works for both anonymous and registered users.
+      operationId: getBookingHistory
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page
+          schema:
+            type: integer
+            default: 10
+            maximum: 50
+        - name: status
+          in: query
+          description: Filter by booking status
+          schema:
+            type: string
+            enum: [pending, confirmed, cancelled, completed]
+      responses:
+        '200':
+          description: Booking history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingHistoryResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/username/check:
+    post:
+      tags:
+        - Auth
+      summary: Check username availability
+      description: Check if a username is available for registration
+      operationId: checkUsername
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckUsernameRequest'
+      responses:
+        '200':
+          description: Username availability status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsernameAvailabilityResponse'
+        '400':
+          description: Invalid username format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/username/lookup:
+    post:
+      tags:
+        - Auth
+      summary: Lookup email by username
+      description: |
+        Get the email associated with a username.
+        Used in the login flow when user enters username instead of email.
+      operationId: lookupUsername
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LookupUsernameRequest'
+      responses:
+        '200':
+          description: Email found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsernameLookupResponse'
+        '404':
+          description: Username not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/link-bookings:
+    post:
+      tags:
+        - Auth
+      summary: Link existing bookings
+      description: |
+        Link existing bookings made as guest to the authenticated user.
+        Matches by phone number or email.
+      operationId: linkBookings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkBookingsRequest'
+      responses:
+        '200':
+          description: Bookings linked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkBookingsResponse'
+        '400':
+          description: Phone number or email required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/account:
+    delete:
+      tags:
+        - Auth
+      summary: Delete user account
+      description: |
+        Delete the authenticated user's account.
+        Requires a registered (non-anonymous) user.
+        Existing bookings will have their user reference removed but won't be deleted.
+      operationId: deleteAccount
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Account deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessageResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Anonymous users cannot delete accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ==================== Court Endpoints ====================
 
   /api/courts:
     get:
@@ -466,6 +815,7 @@ paths:
       summary: Get bookings by phone
       description: Get all bookings for a phone number
       operationId: getBookingsByPhone
+      security: []
       parameters:
         - name: phone
           in: query
@@ -485,39 +835,188 @@ paths:
       tags:
         - Bookings
       summary: Create a booking
-      description: Create a new court booking. Minimum duration is 1 hour, in 30-minute increments.
+      description: |
+        Create a new court booking. Minimum duration is 1 hour, in 30-minute increments.
+        
+        **Authentication Required**: Requires an authenticated Firebase user (registered or anonymous).
+        The `userId` is automatically extracted from the Bearer token and should NOT be provided in the request body.
+        
+        **Single vs Group Bookings**:
+        - **Single booking**: Provide `subCourtId`, `date`, `startTime`, `endTime` directly in the request body.
+          Response will be a single booking object.
+        - **Group booking**: Provide an array of bookings via the `bookings` field.
+          Response will be an array of booking objects.
+        
+        **Time Validation**:
+        - Start time must be before end time
+        - Minimum duration: 1 hour (60 minutes)
+        - Time increments: 30-minute slots only
+        - Format: "HH:mm" (24-hour format)
+        
+        **Date Format**: "YYYY-MM-DD"
       operationId: createBooking
+      security:
+        - BearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateBookingRequest'
+            examples:
+              singleBooking:
+                summary: Single booking example
+                value:
+                  subCourtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                  date: "2025-12-15"
+                  startTime: "14:00"
+                  endTime: "16:00"
+                  guestName: "Nguyễn Văn A"
+                  guestPhone: "0912345678"
+                  guestEmail: "nguyen.van.a@example.com"
+                  notes: "Prefer court near entrance"
+              groupBooking:
+                summary: Group booking (multiple courts/times)
+                value:
+                  bookings:
+                    - subCourtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                      date: "2025-12-15"
+                      startTime: "14:00"
+                      endTime: "16:00"
+                    - subCourtId: "b1ffc99-9c0b-4ef8-bb6d-6bb9bd380a22"
+                      date: "2025-12-15"
+                      startTime: "14:00"
+                      endTime: "16:00"
+                  guestName: "Nguyễn Văn A"
+                  guestPhone: "0912345678"
+                  guestEmail: "nguyen.van.a@example.com"
+                  notes: "Tournament booking"
       responses:
         '201':
           description: Booking created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BookingResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/BookingResponse'
+                  - $ref: '#/components/schemas/BookingListResponse'
+              examples:
+                singleBookingResponse:
+                  summary: Single booking response
+                  value:
+                    success: true
+                    data:
+                      id: "c2ddc99-9c0b-4ef8-bb6d-6bb9bd380a33"
+                      subCourtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                      subCourtName: "Sân 1"
+                      courtId: "d3eec99-9c0b-4ef8-bb6d-6bb9bd380a44"
+                      courtName: "Sân Cầu Lông Ngọc Khánh"
+                      guestName: "Nguyễn Văn A"
+                      guestPhone: "0912345678"
+                      guestEmail: "nguyen.van.a@example.com"
+                      date: "2025-12-15"
+                      startTime: "14:00"
+                      endTime: "16:00"
+                      totalPrice: 200000
+                      status: "pending"
+                      notes: "Prefer court near entrance"
+                      createdAt: "2025-12-10T10:30:00.000Z"
+                groupBookingResponse:
+                  summary: Group booking response
+                  value:
+                    success: true
+                    data:
+                      - id: "c2ddc99-9c0b-4ef8-bb6d-6bb9bd380a33"
+                        subCourtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                        subCourtName: "Sân 1"
+                        courtId: "d3eec99-9c0b-4ef8-bb6d-6bb9bd380a44"
+                        courtName: "Sân Cầu Lông Ngọc Khánh"
+                        guestName: "Nguyễn Văn A"
+                        guestPhone: "0912345678"
+                        guestEmail: "nguyen.van.a@example.com"
+                        date: "2025-12-15"
+                        startTime: "14:00"
+                        endTime: "16:00"
+                        totalPrice: 200000
+                        status: "pending"
+                        notes: "Tournament booking"
+                        createdAt: "2025-12-10T10:30:00.000Z"
+                      - id: "e4ffc99-9c0b-4ef8-bb6d-6bb9bd380a55"
+                        subCourtId: "b1ffc99-9c0b-4ef8-bb6d-6bb9bd380a22"
+                        subCourtName: "Sân 2"
+                        courtId: "d3eec99-9c0b-4ef8-bb6d-6bb9bd380a44"
+                        courtName: "Sân Cầu Lông Ngọc Khánh"
+                        guestName: "Nguyễn Văn A"
+                        guestPhone: "0912345678"
+                        guestEmail: "nguyen.van.a@example.com"
+                        date: "2025-12-15"
+                        startTime: "14:00"
+                        endTime: "16:00"
+                        totalPrice: 200000
+                        status: "pending"
+                        notes: "Tournament booking"
+                        createdAt: "2025-12-10T10:30:00.000Z"
         '400':
-          description: Invalid request
+          description: Invalid request (bad format, invalid time range, duration less than 1 hour, or not 30-minute increments)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidDate:
+                  summary: Invalid date format
+                  value:
+                    success: false
+                    error:
+                      message: "Invalid date format for 2025-15-12. Use YYYY-MM-DD"
+                shortDuration:
+                  summary: Duration less than 1 hour
+                  value:
+                    success: false
+                    error:
+                      message: "Minimum booking duration is 1 hour"
+                invalidIncrement:
+                  summary: Not 30-minute increment
+                  value:
+                    success: false
+                    error:
+                      message: "Booking duration must be in 30-minute increments"
+                invalidTimeRange:
+                  summary: Start time after end time
+                  value:
+                    success: false
+                    error:
+                      message: "Start time must be before end time for 16:00-14:00"
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  message: "Authentication required"
         '404':
           description: Sub-court not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  message: "Sub-court a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 not found"
         '409':
           description: Time slot already booked
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  message: "Time slot 14:00-16:00 for Sân 1 is already booked"
 
   /api/bookings/{id}:
     get:
@@ -1203,12 +1702,10 @@ components:
               $ref: '#/components/schemas/AvailabilityData'
 
     # Booking Schemas
-    CreateBookingRequest:
+    BookingItem:
       type: object
       required:
         - subCourtId
-        - guestName
-        - guestPhone
         - date
         - startTime
         - endTime
@@ -1216,23 +1713,110 @@ components:
         subCourtId:
           type: string
           format: uuid
-        guestName:
-          type: string
-        guestPhone:
-          type: string
-        guestEmail:
-          type: string
+          description: The sub-court to book
         date:
           type: string
           format: date
+          description: Booking date in YYYY-MM-DD format
+          example: '2025-12-15'
         startTime:
           type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          description: Start time in HH:mm format (24-hour)
           example: '10:00'
         endTime:
           type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          description: End time in HH:mm format (24-hour). Must be at least 1 hour after startTime, in 30-minute increments.
           example: '12:00'
+
+    CreateSingleBookingRequest:
+      type: object
+      required:
+        - subCourtId
+        - date
+        - startTime
+        - endTime
+        - guestName
+        - guestPhone
+      properties:
+        subCourtId:
+          type: string
+          format: uuid
+          description: The sub-court to book
+        date:
+          type: string
+          format: date
+          description: Booking date in YYYY-MM-DD format
+          example: '2025-12-15'
+        startTime:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          description: Start time in HH:mm format (24-hour)
+          example: '10:00'
+        endTime:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          description: End time in HH:mm format (24-hour). Must be at least 1 hour after startTime, in 30-minute increments.
+          example: '12:00'
+        guestName:
+          type: string
+          description: Full name of the person making the booking
+          example: 'Nguyễn Văn A'
+        guestPhone:
+          type: string
+          description: Contact phone number
+          example: '0912345678'
+        guestEmail:
+          type: string
+          format: email
+          description: Optional email address
+          example: 'nguyen.van.a@example.com'
         notes:
           type: string
+          description: Optional booking notes or special requests
+          example: 'Prefer court near entrance'
+
+    CreateGroupBookingRequest:
+      type: object
+      required:
+        - bookings
+        - guestName
+        - guestPhone
+      properties:
+        bookings:
+          type: array
+          minItems: 1
+          description: Array of bookings to create (for multiple courts or time slots)
+          items:
+            $ref: '#/components/schemas/BookingItem'
+        guestName:
+          type: string
+          description: Full name of the person making the bookings
+          example: 'Nguyễn Văn A'
+        guestPhone:
+          type: string
+          description: Contact phone number
+          example: '0912345678'
+        guestEmail:
+          type: string
+          format: email
+          description: Optional email address
+          example: 'nguyen.van.a@example.com'
+        notes:
+          type: string
+          description: Optional booking notes or special requests
+          example: 'Tournament booking for group event'
+
+    CreateBookingRequest:
+      description: |
+        Request body for creating a booking. Can be either a single booking or group booking.
+        
+        **Important**: Do NOT include `userId` in the request body. It is automatically extracted 
+        from the Firebase authentication token (Bearer token) in the Authorization header.
+      oneOf:
+        - $ref: '#/components/schemas/CreateSingleBookingRequest'
+        - $ref: '#/components/schemas/CreateGroupBookingRequest'
 
     Booking:
       type: object
@@ -1240,42 +1824,64 @@ components:
         id:
           type: string
           format: uuid
+          description: Booking UUID
         subCourtId:
           type: string
           format: uuid
+          description: Sub-court UUID
         subCourtName:
           type: string
+          description: Name of the sub-court (e.g., "Sân 1")
         courtId:
           type: string
           format: uuid
+          description: Parent court UUID
         courtName:
           type: string
+          description: Name of the main court
         guestName:
           type: string
+          description: Name of the person who made the booking
         guestPhone:
           type: string
+          description: Contact phone number
         guestEmail:
           type: string
           nullable: true
+          description: Contact email (optional)
         date:
           type: string
           format: date
+          description: Booking date in YYYY-MM-DD format
         startTime:
           type: string
+          description: Start time in HH:mm format
+          example: '10:00'
         endTime:
           type: string
+          description: End time in HH:mm format
+          example: '12:00'
         totalPrice:
           type: integer
-          description: Total price in VND
+          description: Total price in VND (Vietnamese Dong)
+          example: 200000
         status:
           type: string
           enum: [pending, confirmed, cancelled, completed]
+          description: |
+            Booking status:
+            - `pending`: Booking created but payment not completed
+            - `confirmed`: Payment successful, booking confirmed
+            - `cancelled`: Booking cancelled
+            - `completed`: Booking finished (past end time)
         notes:
           type: string
           nullable: true
+          description: Optional booking notes
         createdAt:
           type: string
           format: date-time
+          description: Timestamp when booking was created
 
     BookingResponse:
       allOf:
@@ -1413,4 +2019,333 @@ components:
           type: integer
         return_message:
           type: string
+
+    # ==================== Auth Schemas ====================
+
+    VerifyTokenRequest:
+      type: object
+      required:
+        - idToken
+      properties:
+        idToken:
+          type: string
+          description: Firebase ID token
+        profile:
+          $ref: '#/components/schemas/UpdateProfileRequest'
+
+    CreateAnonymousRequest:
+      type: object
+      required:
+        - firebaseUid
+      properties:
+        firebaseUid:
+          type: string
+          description: Firebase anonymous UID from client
+
+    ConvertAnonymousRequest:
+      type: object
+      required:
+        - provider
+      properties:
+        newFirebaseUid:
+          type: string
+          description: New Firebase UID after linking/upgrading account
+        provider:
+          type: string
+          enum: [google, facebook, password]
+          description: Provider used for upgrade
+        email:
+          type: string
+          format: email
+          description: Email (required for password provider)
+        username:
+          type: string
+          description: Optional username (3-50 chars, letters, numbers, underscores)
+        profile:
+          $ref: '#/components/schemas/UpdateProfileRequest'
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: '^[a-zA-Z0-9_]+$'
+          description: Username (3-50 chars, letters, numbers, underscores only)
+        firstName:
+          type: string
+          maxLength: 100
+        lastName:
+          type: string
+          maxLength: 100
+        gender:
+          type: string
+          enum: [male, female, other, prefer_not_to_say]
+        phoneNumber:
+          type: string
+          maxLength: 20
+        photoUrl:
+          type: string
+          format: uri
+        addressStreet:
+          type: string
+          maxLength: 255
+        addressWard:
+          type: string
+          maxLength: 100
+        addressDistrict:
+          type: string
+          maxLength: 100
+        addressCity:
+          type: string
+          maxLength: 100
+          default: Hà Nội
+
+    CheckUsernameRequest:
+      type: object
+      required:
+        - username
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+
+    LookupUsernameRequest:
+      type: object
+      required:
+        - username
+      properties:
+        username:
+          type: string
+
+    LinkBookingsRequest:
+      type: object
+      properties:
+        phoneNumber:
+          type: string
+          description: Phone number to match bookings
+        email:
+          type: string
+          format: email
+          description: Email to match bookings
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        firebaseUid:
+          type: string
+        email:
+          type: string
+          nullable: true
+        username:
+          type: string
+          nullable: true
+        provider:
+          type: string
+          enum: [google, facebook, password, anonymous]
+        isAnonymous:
+          type: boolean
+        firstName:
+          type: string
+          nullable: true
+        lastName:
+          type: string
+          nullable: true
+        gender:
+          type: string
+          enum: [male, female, other, prefer_not_to_say]
+          nullable: true
+        phoneNumber:
+          type: string
+          nullable: true
+        photoUrl:
+          type: string
+          nullable: true
+        address:
+          $ref: '#/components/schemas/UserAddress'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserAddress:
+      type: object
+      nullable: true
+      properties:
+        street:
+          type: string
+          nullable: true
+        ward:
+          type: string
+          nullable: true
+        district:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+
+    AuthResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  $ref: '#/components/schemas/UserProfile'
+                isNewUser:
+                  type: boolean
+
+    ConvertResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  $ref: '#/components/schemas/UserProfile'
+                converted:
+                  type: boolean
+
+    UserProfileResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  $ref: '#/components/schemas/UserProfile'
+
+    UsernameAvailabilityResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                username:
+                  type: string
+                available:
+                  type: boolean
+
+    UsernameLookupResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+
+    LinkBookingsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                linkedCount:
+                  type: integer
+                message:
+                  type: string
+
+    BookingHistoryItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+        startTime:
+          type: string
+          example: '10:00'
+        endTime:
+          type: string
+          example: '12:00'
+        totalPrice:
+          type: integer
+          description: Price in VND
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled, completed]
+        notes:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        court:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            addressDistrict:
+              type: string
+              nullable: true
+            addressCity:
+              type: string
+              nullable: true
+        subCourt:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+
+    BookingHistoryResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                bookings:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/BookingHistoryItem'
+                pagination:
+                  type: object
+                  properties:
+                    page:
+                      type: integer
+                    limit:
+                      type: integer
+                    total:
+                      type: integer
+                    totalPages:
+                      type: integer
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID Token
+      description: Firebase ID token obtained from Firebase Auth SDK
 

@@ -5,9 +5,11 @@ import { availabilityRoutes } from './availability.routes.js';
 import { bookingRoutes } from './booking.routes.js';
 import { paymentRoutes } from './payment.routes.js';
 import { searchRoutes, searchAdminRoutes } from './search.routes.js';
+import { authRoutes } from './auth.routes.js';
 
 const router = Router();
 
+router.use('/auth', authRoutes);
 router.use('/courts', courtRoutes);
 router.use('/map-tiles', mapTilesRoutes);
 router.use('/', availabilityRoutes); // /courts/:courtId/availability

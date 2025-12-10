@@ -151,12 +151,14 @@ export class AvailabilityRepository {
     const result = await prisma.$queryRaw<{ id: string }[]>`
       INSERT INTO bookings (
         sub_court_id, guest_name, guest_phone, guest_email,
+        user_id,
         date, start_time, end_time, total_price, status, notes
       ) VALUES (
         ${data.subCourtId}::uuid,
         ${data.guestName},
         ${data.guestPhone},
         ${data.guestEmail ?? null},
+        ${data.userId ?? null}::uuid,
         ${data.date}::date,
         ${data.startTime}::time,
         ${data.endTime}::time,
@@ -170,6 +172,72 @@ export class AvailabilityRepository {
       throw new Error('Failed to create booking');
     }
     return result[0];
+  }
+
+  /**
+   * Create multiple bookings in a transaction
+   */
+  async createBookings(
+    bookings: {
+      subCourtId: string;
+      date: string;
+      startTime: string;
+      endTime: string;
+      totalPrice: number;
+    }[],
+    commonData: {
+      guestName: string;
+      guestPhone: string;
+      guestEmail?: string;
+      userId?: string;
+      notes?: string;
+      groupId: string;
+    }
+  ): Promise<string[]> {
+    return prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const booking of bookings) {
+        const result = await tx.$queryRaw<{ id: string }[]>`
+          INSERT INTO bookings (
+            sub_court_id, guest_name, guest_phone, guest_email,
+            user_id,
+            date, start_time, end_time, total_price, status, notes, group_id
+          ) VALUES (
+            ${booking.subCourtId}::uuid,
+            ${commonData.guestName},
+            ${commonData.guestPhone},
+            ${commonData.guestEmail ?? null},
+            ${commonData.userId ?? null}::uuid,
+            ${booking.date}::date,
+            ${booking.startTime}::time,
+            ${booking.endTime}::time,
+            ${booking.totalPrice},
+            'pending',
+            ${commonData.notes ?? null},
+            ${commonData.groupId}::uuid
+          )
+          RETURNING id
+        `;
+        if (result[0]) {
+          ids.push(result[0].id);
+        }
+      }
+      return ids;
+    });
+  }
+
+  /**
+   * Get bookings by Group ID
+   */
+  async getBookingsByGroupId(groupId: string): Promise<RawBooking[]> {
+    return prisma.$queryRaw<RawBooking[]>`
+      SELECT b.id, b.sub_court_id, b.date, 
+             TO_CHAR(b.start_time, 'HH24:MI') as start_time,
+             TO_CHAR(b.end_time, 'HH24:MI') as end_time,
+             b.status, b.total_price
+      FROM bookings b
+      WHERE b.group_id = ${groupId}::uuid
+    `;
   }
 
   /**
@@ -191,6 +259,7 @@ export class AvailabilityRepository {
     status: string;
     notes: string | null;
     created_at: Date;
+    group_id: string | null;
   } | null> {
     const results = await prisma.$queryRaw<{
       id: string;
@@ -208,6 +277,7 @@ export class AvailabilityRepository {
       status: string;
       notes: string | null;
       created_at: Date;
+      group_id: string | null;
     }[]>`
       SELECT b.id, b.sub_court_id, sc.name as sub_court_name,
              sc.court_id, c.name as court_name,
@@ -215,7 +285,8 @@ export class AvailabilityRepository {
              b.date, 
              TO_CHAR(b.start_time, 'HH24:MI') as start_time,
              TO_CHAR(b.end_time, 'HH24:MI') as end_time,
-             b.total_price, b.status, b.notes, b.created_at
+             b.total_price, b.status, b.notes, b.created_at,
+             b.group_id
       FROM bookings b
       JOIN sub_courts sc ON b.sub_court_id = sc.id
       JOIN courts c ON sc.court_id = c.id
