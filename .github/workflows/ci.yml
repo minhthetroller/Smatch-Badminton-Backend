@@ -172,18 +172,66 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # Optional: Deploy job (uncomment and configure when ready)
-  # deploy:
-  #   name: Deploy
-  #   runs-on: ubuntu-latest
-  #   needs: build
-  #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-  #   steps:
-  #     - name: Download build artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: dist
-  #         path: dist/
-  #
-  #     - name: Deploy to production
-  #       run: echo "Deploy step - configure your deployment here"
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create deployment package
+        run: tar -czf deploy.tar.gz dist/ package.json package-lock.json prisma/
+
+      - name: Copy to EC2
+        run: scp deploy.tar.gz ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/
+
+      - name: Deploy and restart PM2
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
+            set -e
+            APP_DIR=/home/ubuntu/arc_badminton
+            
+            cd $APP_DIR
+            
+            # Extract new deployment
+            tar -xzf /tmp/deploy.tar.gz
+            rm /tmp/deploy.tar.gz
+            
+            # Write .env from secret
+            echo "${{ secrets.ENV_FILE }}" > .env
+            
+            # Install production dependencies only
+            npm ci --omit=dev
+            
+            # Generate Prisma client
+            npx prisma generate
+            
+            # Zero-downtime reload with PM2
+            pm2 reload all --update-env
+            
+            # Save PM2 process list
+            pm2 save
+          ENDSSH
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -f --retry 3 --retry-delay 5 http://${{ secrets.EC2_HOST }}/health || echo "Health check endpoint not available"
