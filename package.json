@@ -1,6 +1,6 @@
 {
   "name": "arc_badminton_backend",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "type": "module",
   "description": "Arc Badminton Backend API",
   "main": "dist/index.js",
