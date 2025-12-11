@@ -246,6 +246,14 @@ jobs:
             # Generate Prisma client
             npx prisma generate
             
+            # Backup database before migration (optional but recommended)
+            echo "Checking migration status..."
+            npx prisma migrate status || true
+            
+            # Run database migrations (non-destructive, preserves data)
+            echo "Deploying migrations..."
+            npx prisma migrate deploy
+            
             # Delete any existing arc-badminton processes to rename with new version
             pm2 delete all 2>/dev/null || true
             
