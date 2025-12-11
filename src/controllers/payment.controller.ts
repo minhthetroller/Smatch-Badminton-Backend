@@ -79,6 +79,20 @@ export class PaymentController {
       next(error);
     }
   }
+
+  /**
+   * POST /payments/:id/cancel
+   * Cancel a pending payment (user-initiated cancellation)
+   */
+  async cancelPayment(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const payment = await paymentService.cancelPayment(id!);
+      sendSuccess(res, payment);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export const paymentController = new PaymentController();

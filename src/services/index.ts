@@ -8,4 +8,5 @@ export * from './websocket.service.js';
 export * from './search.service.js';
 export * from './firebase.service.js';
 export * from './user.service.js';
+export * from './scheduler.service.js';
 

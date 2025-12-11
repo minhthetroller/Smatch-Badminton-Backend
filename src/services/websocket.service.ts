@@ -10,7 +10,7 @@ interface PaymentSubscription {
 export interface PaymentNotification {
   type: 'payment_status';
   paymentId: string;
-  status: 'success' | 'failed' | 'expired';
+  status: 'success' | 'failed' | 'expired' | 'cancelled';
   bookingId: string;
   zpTransId?: string;
   message: string;
@@ -19,6 +19,7 @@ export interface PaymentNotification {
 class WebSocketService {
   private wss: WebSocketServer | null = null;
   private subscriptions: Map<string, Set<WebSocket>> = new Map(); // paymentId -> Set of WebSocket connections
+  private wsToPaymentIds: WeakMap<WebSocket, Set<string>> = new WeakMap(); // Track which payments each WebSocket is subscribed to
 
   /**
    * Initialize WebSocket server attached to HTTP server
@@ -40,12 +41,12 @@ class WebSocketService {
 
       ws.on('close', () => {
         console.log('WebSocket client disconnected');
-        this.removeFromAllSubscriptions(ws);
+        this.handleDisconnect(ws);
       });
 
       ws.on('error', (error) => {
         console.error('WebSocket error:', error);
-        this.removeFromAllSubscriptions(ws);
+        this.handleDisconnect(ws);
       });
 
       // Send welcome message
@@ -101,6 +102,15 @@ class WebSocketService {
       this.subscriptions.set(paymentId, new Set());
     }
     this.subscriptions.get(paymentId)!.add(ws);
+    
+    // Track this subscription for the WebSocket
+    let wsPaymentIds = this.wsToPaymentIds.get(ws);
+    if (!wsPaymentIds) {
+      wsPaymentIds = new Set();
+      this.wsToPaymentIds.set(ws, wsPaymentIds);
+    }
+    wsPaymentIds.add(paymentId);
+    
     console.log(`Client subscribed to payment ${paymentId}`);
   }
 
@@ -115,6 +125,39 @@ class WebSocketService {
         this.subscriptions.delete(paymentId);
       }
     }
+    
+    // Remove from tracking
+    const wsPaymentIds = this.wsToPaymentIds.get(ws);
+    if (wsPaymentIds) {
+      wsPaymentIds.delete(paymentId);
+    }
+    
+    console.log(`Client unsubscribed from payment ${paymentId}`);
+  }
+
+  /**
+   * Handle WebSocket disconnect - cancel any pending payments
+   */
+  private handleDisconnect(ws: WebSocket): void {
+    const paymentIds = this.wsToPaymentIds.get(ws);
+    
+    if (paymentIds && paymentIds.size > 0) {
+      // Use dynamic import to avoid circular dependency
+      import('./payment.service.js').then(({ paymentService }) => {
+        for (const paymentId of paymentIds) {
+          paymentService.cancelPayment(paymentId)
+            .then(() => {
+              console.log(`Auto-cancelled payment ${paymentId} due to client disconnect`);
+            })
+            .catch((error: Error) => {
+              // Payment might already be completed/failed, ignore errors
+              console.log(`Could not auto-cancel payment ${paymentId}:`, error.message);
+            });
+        }
+      }).catch(console.error);
+    }
+    
+    this.removeFromAllSubscriptions(ws);
   }
 
   /**
@@ -127,6 +170,7 @@ class WebSocketService {
         this.subscriptions.delete(paymentId);
       }
     }
+    this.wsToPaymentIds.delete(ws);
   }
 
   /**

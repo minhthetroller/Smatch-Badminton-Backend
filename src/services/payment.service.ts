@@ -360,7 +360,79 @@ export class PaymentService {
       };
     }
 
-    // Payment failed or unknown type
+    // Payment failed, refund, or unknown type (type 2 or others)
+    // Update payment and booking status to failed
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: 'failed',
+          callbackData: callbackData as object,
+          updatedAt: new Date(),
+        },
+      });
+
+      await tx.booking.update({
+        where: { id: payment.bookingId },
+        data: {
+          status: 'failed',
+          updatedAt: new Date(),
+        },
+      });
+
+      // Update group bookings to failed
+      const booking = await tx.booking.findUnique({ where: { id: payment.bookingId } }) as any;
+      if (booking?.groupId) {
+         await tx.booking.updateMany({
+           where: { groupId: booking.groupId } as any,
+           data: { status: 'failed', updatedAt: new Date() }
+         });
+      }
+    });
+
+    // Release Redis lock
+    const booking = payment.booking as any;
+    if (booking) {
+      let bookingsToRelease: {
+          id: string;
+          subCourtId: string;
+          date: Date;
+          startTime: string;
+          endTime: string;
+      }[] = [];
+
+      bookingsToRelease.push({
+          id: booking.id,
+          subCourtId: booking.subCourtId,
+          date: booking.date,
+          startTime: typeof booking.startTime === 'string' ? booking.startTime : booking.startTime.toISOString().slice(11, 16),
+          endTime: typeof booking.endTime === 'string' ? booking.endTime : booking.endTime.toISOString().slice(11, 16),
+      });
+
+      if (booking.groupId) {
+         const groupBookings = await availabilityRepository.getBookingsByGroupId(booking.groupId);
+         if (groupBookings.length > 0) {
+           bookingsToRelease = groupBookings.map(b => ({
+             id: b.id,
+             subCourtId: b.sub_court_id,
+             date: new Date(b.date),
+             startTime: b.start_time,
+             endTime: b.end_time,
+           }));
+         }
+      }
+
+      const slotsToRelease = bookingsToRelease.map(b => ({
+        subCourtId: b.subCourtId,
+        date: b.date.toISOString().split('T')[0]!,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        bookingId: b.id
+      }));
+
+      await redisService.releaseSlotLocks(slotsToRelease);
+    }
+
     websocketService.notifyPaymentStatus({
       type: 'payment_status',
       paymentId: payment.id,
@@ -370,8 +442,8 @@ export class PaymentService {
     });
 
     return {
-      return_code: 2,
-      return_message: 'Unknown callback type',
+      return_code: 1,
+      return_message: 'Processed',
     };
   }
 
@@ -475,7 +547,34 @@ export class PaymentService {
 
       case 2: // Failed
         newStatus = 'failed';
-        await paymentRepository.updateStatus(payment.id, newStatus);
+        
+        // Update payment and booking status to failed
+        await prisma.$transaction(async (tx) => {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: newStatus,
+              updatedAt: new Date(),
+            },
+          });
+
+          await tx.booking.update({
+            where: { id: payment.bookingId },
+            data: {
+              status: 'failed',
+              updatedAt: new Date(),
+            },
+          });
+
+          // Update group bookings to failed
+          const booking = await tx.booking.findUnique({ where: { id: payment.bookingId } }) as any;
+          if (booking?.groupId) {
+             await tx.booking.updateMany({
+               where: { groupId: booking.groupId } as any,
+               data: { status: 'failed', updatedAt: new Date() }
+             });
+          }
+        });
 
         // Release Redis lock
         if (payment.booking) {
@@ -564,6 +663,106 @@ export class PaymentService {
     }
 
     return this.formatPaymentResponse(payments[0]!);
+  }
+
+  /**
+   * Cancel a pending payment (user-initiated cancellation)
+   * This marks both the payment and booking as cancelled, and releases locks
+   */
+  async cancelPayment(paymentId: string): Promise<PaymentResponse> {
+    const payment = await paymentRepository.findById(paymentId);
+    if (!payment) {
+      throw new NotFoundError('Payment not found');
+    }
+
+    // Only pending payments can be cancelled
+    if (payment.status !== 'pending') {
+      throw new BadRequestError(`Cannot cancel payment with status: ${payment.status}`);
+    }
+
+    // Update payment and booking status to cancelled
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: 'failed', // Payment is marked as failed
+          updatedAt: new Date(),
+        },
+      });
+
+      await tx.booking.update({
+        where: { id: payment.bookingId },
+        data: {
+          status: 'cancelled', // Booking is cancelled by user
+          updatedAt: new Date(),
+        },
+      });
+
+      // Cancel group bookings
+      const booking = await tx.booking.findUnique({ where: { id: payment.bookingId } }) as any;
+      if (booking?.groupId) {
+         await tx.booking.updateMany({
+           where: { groupId: booking.groupId } as any,
+           data: { status: 'cancelled', updatedAt: new Date() }
+         });
+      }
+    });
+
+    // Release Redis locks
+    const booking = payment.booking as any;
+    if (booking) {
+      let bookingsToRelease: {
+          id: string;
+          subCourtId: string;
+          date: Date;
+          startTime: string;
+          endTime: string;
+      }[] = [];
+
+      bookingsToRelease.push({
+          id: booking.id,
+          subCourtId: booking.subCourtId,
+          date: booking.date,
+          startTime: typeof booking.startTime === 'string' ? booking.startTime : booking.startTime.toISOString().slice(11, 16),
+          endTime: typeof booking.endTime === 'string' ? booking.endTime : booking.endTime.toISOString().slice(11, 16),
+      });
+
+      if (booking.groupId) {
+         const groupBookings = await availabilityRepository.getBookingsByGroupId(booking.groupId);
+         if (groupBookings.length > 0) {
+           bookingsToRelease = groupBookings.map(b => ({
+             id: b.id,
+             subCourtId: b.sub_court_id,
+             date: new Date(b.date),
+             startTime: b.start_time,
+             endTime: b.end_time,
+           }));
+         }
+      }
+
+      const slotsToRelease = bookingsToRelease.map(b => ({
+        subCourtId: b.subCourtId,
+        date: b.date.toISOString().split('T')[0]!,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        bookingId: b.id
+      }));
+
+      await redisService.releaseSlotLocks(slotsToRelease);
+    }
+
+    // Notify via WebSocket
+    websocketService.notifyPaymentStatus({
+      type: 'payment_status',
+      paymentId: payment.id,
+      status: 'cancelled',
+      bookingId: payment.bookingId,
+      message: 'Payment cancelled',
+    });
+
+    // Fetch and return updated payment
+    const updatedPayment = await paymentRepository.findById(paymentId);
+    return this.formatPaymentResponse(updatedPayment!);
   }
 
   /**

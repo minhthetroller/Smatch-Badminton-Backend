@@ -5,7 +5,7 @@ import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { apiRoutes } from './routes/index.js';
 import { docsRoutes } from './routes/docs.routes.js';
 import { errorHandler, notFoundHandler } from './middlewares/index.js';
-import { websocketService, redisService } from './services/index.js';
+import { websocketService, redisService, schedulerService } from './services/index.js';
 
 const app: Express = express();
 const server = createServer(app);
@@ -36,6 +36,7 @@ app.use(errorHandler);
 // Graceful shutdown
 async function shutdown(): Promise<void> {
   console.log('Shutting down...');
+  schedulerService.stop();
   websocketService.close();
   await redisService.close();
   await disconnectDatabase();
@@ -62,6 +63,9 @@ async function start(): Promise<void> {
   const dbConnected = await connectDatabase();
   if (!dbConnected) {
     console.warn('⚠️  Server running without database connection. Run docker:up first.');
+  } else {
+    // Start scheduler only if database is connected
+    schedulerService.start();
   }
 }
 

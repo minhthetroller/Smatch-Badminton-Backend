@@ -19,5 +19,9 @@ router.get('/:id', (req, res, next) => paymentController.getPaymentById(req, res
 // Query payment status from ZaloPay and sync
 router.get('/:id/status', (req, res, next) => paymentController.queryPaymentStatus(req, res, next));
 
+// POST /payments/:id/cancel
+// Cancel a pending payment (user-initiated cancellation)
+router.post('/:id/cancel', (req, res, next) => paymentController.cancelPayment(req, res, next));
+
 export { router as paymentRoutes };
 
