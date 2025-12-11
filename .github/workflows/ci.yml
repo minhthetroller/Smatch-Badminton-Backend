@@ -5,6 +5,12 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., 2.0.0). Leave empty to use package.json version.'
+        required: false
+        type: string
 
 env:
   NODE_VERSION: '22'
@@ -176,6 +182,7 @@ jobs:
     name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: build
+    environment: smatch-badminton
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
@@ -201,22 +208,37 @@ jobs:
       - name: Copy to EC2
         run: scp deploy.tar.gz ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/
 
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          fi
+          echo "Deploying version: $(cat $GITHUB_OUTPUT | grep VERSION | cut -d= -f2)"
+
       - name: Deploy and restart PM2
         env:
-          ENV_FILE: ${{ secrets.ENV_FILE }}
+          APP_VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'ENDSSH'
+          ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "bash -s" << ENDSSH
             set -e
             APP_DIR=/home/ubuntu/arc_badminton
+            APP_NAME="arc-badminton"
+            VERSION="$APP_VERSION"
             
-            cd $APP_DIR
+            cd \$APP_DIR
             
             # Extract new deployment
             tar -xzf /tmp/deploy.tar.gz
             rm /tmp/deploy.tar.gz
             
             # Write .env from secret
-            echo "${{ secrets.ENV_FILE }}" > .env
+            cat > .env << 'ENVEOF'
+          ${{ secrets.ENV_FILE }}
+          ENVEOF
             
             # Install production dependencies only
             npm ci --omit=dev
@@ -224,8 +246,14 @@ jobs:
             # Generate Prisma client
             npx prisma generate
             
-            # Zero-downtime reload with PM2
-            pm2 reload all --update-env
+            # Delete any existing arc-badminton processes to rename with new version
+            pm2 delete all 2>/dev/null || true
+            
+            # Start process with version name
+            pm2 start dist/index.js --name "\${APP_NAME}-v\${VERSION}" --update-env
+            
+            echo "Deployed version: \$VERSION"
+            pm2 list
             
             # Save PM2 process list
             pm2 save
