@@ -176,6 +176,7 @@ jobs:
     name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: build
+    environment: smatch-badminton
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
