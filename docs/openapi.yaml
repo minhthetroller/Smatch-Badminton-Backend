@@ -11,7 +11,19 @@ info:
     - **Bookings**: Court reservation system
     - **Payments**: ZaloPay integration with real-time WebSocket notifications
     - **Map Tiles**: Vector tiles for interactive maps
-  version: 1.0.0
+    - **Exchange Matches**: Create and join badminton matches with other players
+    
+    ## Changelog
+    ### v2.3.0 (2025-12-27)
+    - Added `POST /api/matches/{id}/payment` for ZaloPay match join payments
+    - Added `GET /api/matches/{id}/payment/{paymentId}/status` for payment status query
+    - Added `PENDING_PAYMENT` and `EXPIRED` to MatchPlayerStatus enum
+    - Added `MATCH_JOIN` payment type
+    - Fixed null-safety on host serialization in match responses
+    - Updated error responses to include machine-readable `code` field
+    - Aligned SkillLevel enum: TBY, Y, Y_PLUS, Y_PLUS_PLUS, TBK, TB, TB_PLUS, TB_PLUS_PLUS, K, K_PLUS, GIOI
+    - Aligned PlayerFormat enum: SINGLE_MALE, SINGLE_FEMALE, DOUBLE_MALE, DOUBLE_FEMALE, MIXED_DOUBLE, ANY
+  version: 2.3.0
   contact:
     name: API Support
   license:
@@ -36,6 +48,8 @@ tags:
     description: Booking management
   - name: Payments
     description: ZaloPay payment integration
+  - name: Matches
+    description: Exchange match creation and joining
   - name: Map Tiles
     description: Vector map tiles
   - name: Admin
@@ -1276,6 +1290,645 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  # ==================== Match (Exchange) Endpoints ====================
+
+  /api/matches:
+    get:
+      tags:
+        - Matches
+      summary: List exchange matches
+      description: |
+        Get paginated list of exchange matches with optional filters.
+        Use this to discover matches looking for players.
+      operationId: listMatches
+      security: []
+      parameters:
+        - name: courtId
+          in: query
+          description: Filter by court UUID
+          schema:
+            type: string
+            format: uuid
+        - name: skillLevel
+          in: query
+          description: Filter by skill level
+          schema:
+            $ref: '#/components/schemas/SkillLevel'
+        - name: playerFormat
+          in: query
+          description: Filter by player format
+          schema:
+            $ref: '#/components/schemas/PlayerFormat'
+        - name: status
+          in: query
+          description: Filter by match status
+          schema:
+            $ref: '#/components/schemas/MatchStatus'
+        - name: date
+          in: query
+          description: Filter by specific date (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: dateFrom
+          in: query
+          description: Filter matches from this date
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          description: Filter matches until this date
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page (max 50)
+          schema:
+            type: integer
+            default: 10
+            maximum: 50
+      responses:
+        '200':
+          description: List of matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchListResponse'
+
+    post:
+      tags:
+        - Matches
+      summary: Create an exchange match
+      description: |
+        Create a new exchange match to find players.
+        
+        **Authentication Required**: Requires a registered (non-anonymous) user.
+        
+        **Images**: Provide S3 URLs for match images. Frontend should upload to S3 first.
+        
+        **Privacy**: 
+        - Public matches (isPrivate: false): Players join immediately
+        - Private matches (isPrivate: true): Host must approve join requests
+      operationId: createMatch
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMatchRequest'
+            examples:
+              publicMatch:
+                summary: Public match example
+                value:
+                  courtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                  title: "Đánh giao lưu cuối tuần"
+                  description: "Tìm bạn đánh giao lưu level TB+"
+                  skillLevel: "TB_PLUS"
+                  shuttleType: "TC77"
+                  playerFormat: "DOUBLE_MALE"
+                  date: "2025-12-28"
+                  startTime: "18:00"
+                  endTime: "20:00"
+                  isPrivate: false
+                  price: 50000
+                  slotsNeeded: 3
+              privateMatch:
+                summary: Private match with approval
+                value:
+                  courtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                  title: "Tập luyện nghiêm túc"
+                  skillLevel: "K"
+                  shuttleType: "YONEX_AS40"
+                  playerFormat: "MIXED_DOUBLE"
+                  date: "2025-12-29"
+                  startTime: "19:00"
+                  endTime: "21:00"
+                  isPrivate: true
+                  price: 75000
+                  slotsNeeded: 2
+      responses:
+        '201':
+          description: Match created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Court not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/hosted:
+    get:
+      tags:
+        - Matches
+      summary: Get matches hosted by current user
+      description: Get all matches created by the authenticated user
+      operationId: getHostedMatches
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          description: Filter by match status
+          schema:
+            $ref: '#/components/schemas/MatchStatus'
+      responses:
+        '200':
+          description: List of hosted matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchWithPlayersListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/joined:
+    get:
+      tags:
+        - Matches
+      summary: Get matches joined by current user
+      description: Get all matches the authenticated user has joined or requested to join
+      operationId: getJoinedMatches
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of joined matches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchWithPlayersListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{id}:
+    get:
+      tags:
+        - Matches
+      summary: Get match by ID
+      description: Get detailed match information including all players
+      operationId: getMatchById
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Match details with players
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchWithPlayersResponse'
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Matches
+      summary: Update a match
+      description: Update match details. Only the host can update.
+      operationId: updateMatch
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMatchRequest'
+      responses:
+        '200':
+          description: Match updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized (not the host)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Matches
+      summary: Cancel a match
+      description: Cancel a match. Only the host can cancel. All players will be notified.
+      operationId: cancelMatch
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Match cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessageResponse'
+        '400':
+          description: Cannot cancel (already completed or cancelled)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized (not the host)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{id}/join:
+    post:
+      tags:
+        - Matches
+      summary: Join a match
+      description: |
+        Request to join a match.
+        
+        **Public matches**: Player is immediately accepted (if slots available)
+        **Private matches**: Request is pending until host approves
+        
+        WebSocket notifications are sent to the host for new requests.
+      operationId: joinMatch
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinMatchRequest'
+            examples:
+              withMessage:
+                summary: Join with message to host
+                value:
+                  message: "Mình level TB+, đánh được đôi nam. Có thể đến sớm 15 phút."
+              noMessage:
+                summary: Join without message
+                value: {}
+      responses:
+        '201':
+          description: Join request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchPlayerResponse'
+        '400':
+          description: Invalid request (match not open, host cannot join own match)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already requested or match is full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{id}/leave:
+    delete:
+      tags:
+        - Matches
+      summary: Leave a match
+      description: Leave a match you have joined. The match will reopen if it was full.
+      operationId: leaveMatch
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Left match successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessMessageResponse'
+        '400':
+          description: Not a participant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{id}/requests/{playerId}/respond:
+    post:
+      tags:
+        - Matches
+      summary: Respond to join request
+      description: |
+        Accept or reject a player's join request (host only, for private matches).
+        
+        WebSocket notification is sent to the player with the result.
+      operationId: respondToJoinRequest
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+        - name: playerId
+          in: path
+          required: true
+          description: MatchPlayer UUID (from join request)
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondToJoinRequest'
+            examples:
+              accept:
+                summary: Accept player
+                value:
+                  status: "ACCEPTED"
+              reject:
+                summary: Reject player
+                value:
+                  status: "REJECTED"
+      responses:
+        '200':
+          description: Response recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchPlayerResponse'
+        '400':
+          description: Invalid request (already responded, match full)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized (not the host)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Match or player request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{id}/payment:
+    post:
+      tags:
+        - Matches
+      summary: Create payment for joining a match
+      description: |
+        Create a ZaloPay payment for joining a match (100% upfront fee).
+        
+        **Flow:**
+        1. Validates match exists and is open for joining
+        2. Creates a MatchPlayer with PENDING_PAYMENT status
+        3. Creates ZaloPay order with match price (100% upfront)
+        4. Returns payment details with QR code for scanning
+        5. After payment success, player status changes to ACCEPTED
+        
+        **Notes:**
+        - Amount is automatically set to match price (cannot be overridden)
+        - Free matches (price = 0) should use POST /api/matches/{id}/join directly
+        - Private matches require host approval first
+        - Payment expires after configured timeout (default 15 minutes)
+        
+        **WebSocket:** Subscribe to payment status updates at the returned wsSubscribeUrl
+      operationId: createMatchJoinPayment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Payment created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchPaymentResponse'
+        '400':
+          description: |
+            Bad request:
+            - Match is not open
+            - User is the host
+            - Match is free (use join endpoint)
+            - Private match requires approval first
+            - Match is full
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Already joined or has pending request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{id}/payment/{paymentId}/status:
+    get:
+      tags:
+        - Matches
+      summary: Query match payment status
+      description: |
+        Query the current status of a match join payment from ZaloPay.
+        Updates local record if status changed.
+      operationId: queryMatchPaymentStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+        - name: paymentId
+          in: path
+          required: true
+          description: Payment UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Payment status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentStatusResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Payment not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   schemas:
     # Common Response Schemas
@@ -1298,6 +1951,10 @@ components:
             message:
               type: string
               example: Error description
+            code:
+              type: string
+              description: Machine-readable error code for programmatic handling
+              example: TOKEN_EXPIRED
 
     SuccessMessageResponse:
       allOf:
@@ -2341,6 +2998,476 @@ components:
                       type: integer
                     totalPages:
                       type: integer
+
+    # ==================
+    # Match Schemas
+    # ==================
+    
+    SkillLevel:
+      type: string
+      description: |
+        Player skill level (Vietnamese badminton skill tiers).
+        Values: TBY (Trung bình yếu - Beginner), Y (Yếu - Weak), Y_PLUS (Yếu+), Y_PLUS_PLUS (Yếu++),
+        TBK (Trung bình khá), TB (Trung bình - Average), TB_PLUS (Trung bình+), TB_PLUS_PLUS (Trung bình++),
+        K (Khá - Good), K_PLUS (Khá+), GIOI (Giỏi - Excellent)
+      enum:
+        - TBY
+        - Y
+        - Y_PLUS
+        - Y_PLUS_PLUS
+        - TBK
+        - TB
+        - TB_PLUS
+        - TB_PLUS_PLUS
+        - K
+        - K_PLUS
+        - GIOI
+
+    ShuttleType:
+      type: string
+      description: Type of shuttlecock
+      enum:
+        - TC77
+        - BASAO
+        - YONEX_AS30
+        - YONEX_AS40
+        - YONEX_AS50
+        - VICTOR_MASTER_1
+        - VICTOR_CHAMPION_1
+        - RSL_CLASSIC
+        - LINDAN_40
+        - LINDAN_50
+        - OTHER
+
+    PlayerFormat:
+      type: string
+      description: Player format for the match
+      enum:
+        - SINGLE_MALE
+        - SINGLE_FEMALE
+        - DOUBLE_MALE
+        - DOUBLE_FEMALE
+        - MIXED_DOUBLE
+        - ANY
+
+    MatchStatus:
+      type: string
+      description: Match status
+      enum:
+        - OPEN
+        - FULL
+        - IN_PROGRESS
+        - COMPLETED
+        - CANCELLED
+
+    MatchPlayerStatus:
+      type: string
+      description: Match player status
+      enum:
+        - PENDING
+        - PENDING_PAYMENT
+        - ACCEPTED
+        - REJECTED
+        - LEFT
+        - EXPIRED
+
+    Match:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        courtId:
+          type: string
+          format: uuid
+        hostUserId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        images:
+          type: array
+          items:
+            type: string
+            format: uri
+        skillLevel:
+          $ref: '#/components/schemas/SkillLevel'
+        shuttleType:
+          $ref: '#/components/schemas/ShuttleType'
+        playerFormat:
+          $ref: '#/components/schemas/PlayerFormat'
+        date:
+          type: string
+          format: date
+        startTime:
+          type: string
+          example: '19:00'
+        endTime:
+          type: string
+          example: '21:00'
+        isPrivate:
+          type: boolean
+        price:
+          type: integer
+          description: Price in VND
+        slotsNeeded:
+          type: integer
+          minimum: 1
+          maximum: 10
+        status:
+          $ref: '#/components/schemas/MatchStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    MatchPlayer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        matchId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/MatchPlayerStatus'
+        joinedAt:
+          type: string
+          format: date-time
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            displayName:
+              type: string
+            avatarUrl:
+              type: string
+              format: uri
+              nullable: true
+
+    MatchWithDetails:
+      allOf:
+        - $ref: '#/components/schemas/Match'
+        - type: object
+          properties:
+            court:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                addressFull:
+                  type: string
+                addressCity:
+                  type: string
+                addressDistrict:
+                  type: string
+            host:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                displayName:
+                  type: string
+                avatarUrl:
+                  type: string
+                  format: uri
+                  nullable: true
+            players:
+              type: array
+              items:
+                $ref: '#/components/schemas/MatchPlayer'
+            acceptedPlayersCount:
+              type: integer
+
+    CreateMatchRequest:
+      type: object
+      required:
+        - courtId
+        - title
+        - skillLevel
+        - shuttleType
+        - playerFormat
+        - date
+        - startTime
+        - endTime
+        - price
+        - slotsNeeded
+      properties:
+        courtId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+        images:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uri
+        skillLevel:
+          $ref: '#/components/schemas/SkillLevel'
+        shuttleType:
+          $ref: '#/components/schemas/ShuttleType'
+        playerFormat:
+          $ref: '#/components/schemas/PlayerFormat'
+        date:
+          type: string
+          format: date
+        startTime:
+          type: string
+          pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+          example: '19:00'
+        endTime:
+          type: string
+          pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+          example: '21:00'
+        isPrivate:
+          type: boolean
+          default: false
+        price:
+          type: integer
+          minimum: 0
+          description: Price in VND
+        slotsNeeded:
+          type: integer
+          minimum: 1
+          maximum: 10
+
+    UpdateMatchRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+        images:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            format: uri
+        skillLevel:
+          $ref: '#/components/schemas/SkillLevel'
+        shuttleType:
+          $ref: '#/components/schemas/ShuttleType'
+        playerFormat:
+          $ref: '#/components/schemas/PlayerFormat'
+        date:
+          type: string
+          format: date
+        startTime:
+          type: string
+          pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+        endTime:
+          type: string
+          pattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+        isPrivate:
+          type: boolean
+        price:
+          type: integer
+          minimum: 0
+        slotsNeeded:
+          type: integer
+          minimum: 1
+          maximum: 10
+        status:
+          $ref: '#/components/schemas/MatchStatus'
+
+    JoinMatchRequest:
+      type: object
+      properties:
+        message:
+          type: string
+          maxLength: 500
+          description: Optional message to the host when requesting to join
+
+    RespondToJoinRequest:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          enum:
+            - accept
+            - reject
+
+    MatchResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/MatchWithDetails'
+
+    MatchListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                matches:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/MatchWithDetails'
+                pagination:
+                  type: object
+                  properties:
+                    page:
+                      type: integer
+                    limit:
+                      type: integer
+                    total:
+                      type: integer
+                    totalPages:
+                      type: integer
+
+    MatchPlayerResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                player:
+                  $ref: '#/components/schemas/MatchPlayer'
+                queuePosition:
+                  type: integer
+                  description: Position in the join queue (for private matches)
+
+    # Match Payment Schemas
+    MatchPaymentResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                payment:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    bookingId:
+                      type: string
+                      format: uuid
+                      description: Match ID (for compatibility)
+                    appTransId:
+                      type: string
+                      description: ZaloPay transaction ID
+                    zpTransId:
+                      type: string
+                      nullable: true
+                      description: ZaloPay's internal transaction ID
+                    amount:
+                      type: integer
+                      description: Amount in VND
+                    status:
+                      type: string
+                      enum: [pending, success, failed, expired]
+                    orderUrl:
+                      type: string
+                      nullable: true
+                      description: ZaloPay order URL
+                    createdAt:
+                      type: string
+                      format: date-time
+                    updatedAt:
+                      type: string
+                      format: date-time
+                orderUrl:
+                  type: string
+                  description: ZaloPay order URL for payment
+                qrCode:
+                  type: object
+                  properties:
+                    base64:
+                      type: string
+                      description: Base64 encoded QR code image (data URI)
+                    rawBase64:
+                      type: string
+                      description: Raw base64 QR code without data URI prefix
+                zpTransToken:
+                  type: string
+                  nullable: true
+                  description: Token for ZaloPay mobile SDK
+                expireAt:
+                  type: string
+                  format: date-time
+                  description: Payment expiration time
+                wsSubscribeUrl:
+                  type: string
+                  description: WebSocket URL for payment status updates
+              required:
+                - payment
+                - orderUrl
+                - qrCode
+                - expireAt
+                - wsSubscribeUrl
+
+    PaymentStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                bookingId:
+                  type: string
+                  format: uuid
+                appTransId:
+                  type: string
+                zpTransId:
+                  type: string
+                  nullable: true
+                amount:
+                  type: integer
+                status:
+                  type: string
+                  enum: [pending, success, failed, expired]
+                orderUrl:
+                  type: string
+                  nullable: true
+                createdAt:
+                  type: string
+                  format: date-time
+                updatedAt:
+                  type: string
+                  format: date-time
 
   securitySchemes:
     BearerAuth:

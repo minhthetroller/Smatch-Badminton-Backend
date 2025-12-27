@@ -24,7 +24,7 @@ export function initializeFirebase(): App {
   }
 
   // Try loading from JSON file first
-  const serviceAccountPath = path.join(process.cwd(), 'smatch-badminton-firebase-adminsdk-fbsvc-b4ea537d9e.json');
+  const serviceAccountPath = path.join(process.cwd(), 'smatch-badminton-firebase-adminsdk-fbsvc-fb65abab30.json');
   
   if (fs.existsSync(serviceAccountPath)) {
     try {

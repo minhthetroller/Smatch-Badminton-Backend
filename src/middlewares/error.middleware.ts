@@ -19,7 +19,7 @@ export function errorHandler(
 ): void {
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {
-    sendError(res, err.message, err.statusCode);
+    sendError(res, err.message, err.statusCode, err.code);
     return;
   }
 

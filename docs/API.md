@@ -2,9 +2,46 @@
 
 Base URL: `http://localhost:3000`
 
+**Version:** 2.3.0 (2025-12-27)
+
 ## Overview
 
-This API provides endpoints for managing badminton court information and serving vector map tiles.
+This API provides endpoints for managing badminton court information, bookings, payments, and exchange matches.
+
+## Changelog
+
+### v2.3.0 (2025-12-27)
+- Added `POST /api/matches/{id}/payment` for ZaloPay match join payments
+- Added `GET /api/matches/{id}/payment/{paymentId}/status` for payment status query
+- Added `PENDING_PAYMENT` and `EXPIRED` to MatchPlayerStatus enum
+- Fixed null-safety on host serialization in match responses
+- Updated error responses to include machine-readable `code` field
+- Aligned enums with Prisma schema:
+  - **SkillLevel**: TBY, Y, Y_PLUS, Y_PLUS_PLUS, TBK, TB, TB_PLUS, TB_PLUS_PLUS, K, K_PLUS, GIOI
+  - **PlayerFormat**: SINGLE_MALE, SINGLE_FEMALE, DOUBLE_MALE, DOUBLE_FEMALE, MIXED_DOUBLE, ANY
+
+---
+
+## Error Responses
+
+All error responses include a machine-readable `code` field for programmatic handling:
+
+```json
+{
+  "success": false,
+  "error": {
+    "message": "Token has expired",
+    "code": "TOKEN_EXPIRED"
+  }
+}
+```
+
+Common error codes:
+- `TOKEN_EXPIRED` - Firebase ID token has expired
+- `TOKEN_REVOKED` - Token has been revoked
+- `INVALID_TOKEN` - Invalid token format
+- `MISSING_TOKEN` - No authorization header provided
+- `USER_NOT_FOUND` - User account not found
 
 ---
 
@@ -1350,7 +1387,9 @@ Track ZaloPay payment transactions.
 | Field | Type | Description |
 |-------|------|-------------|
 | id | UUID | Primary key |
-| bookingId | UUID | Booking reference |
+| bookingId | UUID | Booking reference (optional for match payments) |
+| matchPlayerId | UUID | Match player reference (for match join payments) |
+| paymentType | enum | BOOKING, MATCH_JOIN |
 | appTransId | string | ZaloPay transaction ID (format: yymmdd_xxx) |
 | zpTransId | string | ZaloPay's internal transaction ID (from callback) |
 | zpTransToken | string | Token for ZaloPay mobile SDK |
@@ -1360,4 +1399,150 @@ Track ZaloPay payment transactions.
 | callbackData | JSON | Raw callback data for debugging |
 | createdAt | timestamp | Creation time |
 | updatedAt | timestamp | Last update time |
+
+---
+
+## Match Join Payment API
+
+Base path: `/api/matches`
+
+### Create Match Join Payment
+
+```http
+POST /api/matches/:id/payment
+```
+
+Create a ZaloPay payment for joining a match. Requires 100% upfront payment of the match fee.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | Match ID |
+
+**Headers**
+
+| Header | Value | Required |
+|--------|-------|----------|
+| Authorization | Bearer {firebase_id_token} | Yes |
+
+**Example Request**
+```bash
+curl -X POST "http://localhost:3000/api/matches/abc123-uuid/payment" \
+  -H "Authorization: Bearer your-firebase-id-token"
+```
+
+**Response (201 Created)**
+```json
+{
+  "success": true,
+  "data": {
+    "payment": {
+      "id": "payment-uuid",
+      "bookingId": "match-id",
+      "appTransId": "251227_abc12345",
+      "zpTransId": null,
+      "amount": 50000,
+      "status": "pending",
+      "orderUrl": "https://qcgateway.zalopay.vn/openinapp?...",
+      "createdAt": "2025-12-27T10:00:00.000Z",
+      "updatedAt": "2025-12-27T10:00:00.000Z"
+    },
+    "orderUrl": "https://qcgateway.zalopay.vn/openinapp?...",
+    "qrCode": {
+      "base64": "data:image/png;base64,...",
+      "rawBase64": "iVBORw0KGgo..."
+    },
+    "zpTransToken": "token-for-mobile-sdk",
+    "expireAt": "2025-12-27T10:15:00.000Z",
+    "wsSubscribeUrl": "ws://localhost:3000/ws/payments"
+  }
+}
+```
+
+**Error Responses**
+
+| Status | Description |
+|--------|-------------|
+| 400 | Match is not open, user is host, match is free, or match is full |
+| 401 | Authentication required |
+| 404 | Match not found |
+| 409 | Already joined or has pending request |
+
+### Query Match Payment Status
+
+```http
+GET /api/matches/:id/payment/:paymentId/status
+```
+
+Query the current status of a match join payment from ZaloPay.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | Match ID |
+| `paymentId` | UUID | Payment ID |
+
+**Response**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "payment-uuid",
+    "bookingId": "match-id",
+    "appTransId": "251227_abc12345",
+    "zpTransId": "231227000012345",
+    "amount": 50000,
+    "status": "success",
+    "orderUrl": "https://qcgateway.zalopay.vn/openinapp?...",
+    "createdAt": "2025-12-27T10:00:00.000Z",
+    "updatedAt": "2025-12-27T10:02:00.000Z"
+  }
+}
+```
+
+---
+
+## Enums Reference
+
+### SkillLevel
+
+Vietnamese badminton skill tiers:
+
+| Value | Description |
+|-------|-------------|
+| TBY | Tập bóng yếu (Beginner weak) |
+| Y | Yếu (Weak) |
+| Y_PLUS | Yếu+ (Weak+) |
+| Y_PLUS_PLUS | Yếu++ (Weak++) |
+| TBK | Trung bình khá (Average-good) |
+| TB | Trung bình (Average) |
+| TB_PLUS | Trung bình+ (Average+) |
+| TB_PLUS_PLUS | Trung bình++ (Average++) |
+| K | Khá (Good) |
+| K_PLUS | Khá+ (Good+) |
+| GIOI | Giỏi (Excellent) |
+
+### PlayerFormat
+
+| Value | Description |
+|-------|-------------|
+| SINGLE_MALE | Nam đơn (Male singles) |
+| SINGLE_FEMALE | Nữ đơn (Female singles) |
+| DOUBLE_MALE | Nam đôi (Male doubles) |
+| DOUBLE_FEMALE | Nữ đôi (Female doubles) |
+| MIXED_DOUBLE | Đôi nam nữ (Mixed doubles) |
+| ANY | Linh hoạt (Flexible) |
+
+### MatchPlayerStatus
+
+| Value | Description |
+|-------|-------------|
+| PENDING | Waiting for host approval (private match) |
+| PENDING_PAYMENT | Waiting for payment completion |
+| ACCEPTED | Approved and paid (or free match) |
+| REJECTED | Rejected by host |
+| LEFT | Player left the match |
+| EXPIRED | Payment expired |
 

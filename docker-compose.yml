@@ -1,7 +1,7 @@
-version: '3.8'
-
 services:
   postgres:
+    # FORCE INTEL VERSION (Fixes "no matching manifest" on M3)
+    platform: linux/amd64
     image: postgis/postgis:17-3.5
     container_name: arc_badminton_db
     restart: unless-stopped
@@ -36,6 +36,8 @@ services:
     command: redis-server --appendonly yes
 
   pg_tileserv:
+    # FORCE INTEL VERSION (Fixes potential missing ARM build)
+    platform: linux/amd64
     image: pramsey/pg_tileserv:latest
     container_name: arc_badminton_tileserv
     restart: unless-stopped

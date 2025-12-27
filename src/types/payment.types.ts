@@ -1,6 +1,9 @@
 // Payment status
 export type PaymentStatus = 'pending' | 'success' | 'failed' | 'expired';
 
+// Payment type
+export type PaymentType = 'BOOKING' | 'MATCH_JOIN';
+
 // DTO for creating a payment
 export interface CreatePaymentDto {
   bookingId: string;
@@ -9,7 +12,9 @@ export interface CreatePaymentDto {
 // Payment response
 export interface PaymentResponse {
   id: string;
-  bookingId: string;
+  bookingId: string | null;  // Can be null for match payments
+  matchPlayerId?: string | null;  // For match payments
+  paymentType?: PaymentType;
   appTransId: string;
   zpTransId: string | null;
   amount: number;
