@@ -6,6 +6,7 @@ import { bookingRoutes } from './booking.routes.js';
 import { paymentRoutes } from './payment.routes.js';
 import { searchRoutes, searchAdminRoutes } from './search.routes.js';
 import { authRoutes } from './auth.routes.js';
+import { matchRoutes } from './match.routes.js';
 
 const router = Router();
 
@@ -17,5 +18,6 @@ router.use('/bookings', bookingRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/search', searchRoutes);
 router.use('/admin/search', searchAdminRoutes);
+router.use('/matches', matchRoutes);
 
 export { router as apiRoutes };

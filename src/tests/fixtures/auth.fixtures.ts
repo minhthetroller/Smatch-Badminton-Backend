@@ -108,6 +108,7 @@ export const sampleGoogleUser: User = {
   addressWard: 'Phường Bến Nghé',
   addressDistrict: 'Quận 1',
   addressCity: 'Hồ Chí Minh',
+  fcmTokens: [],
   createdAt: baseDate,
   updatedAt: updatedDate,
 };
@@ -128,6 +129,7 @@ export const sampleFacebookUser: User = {
   addressWard: null,
   addressDistrict: 'Quận Ba Đình',
   addressCity: 'Hà Nội',
+  fcmTokens: [],
   createdAt: baseDate,
   updatedAt: updatedDate,
 };
@@ -148,6 +150,7 @@ export const samplePasswordUser: User = {
   addressWard: null,
   addressDistrict: null,
   addressCity: 'Hà Nội',
+  fcmTokens: [],
   createdAt: baseDate,
   updatedAt: updatedDate,
 };
@@ -168,6 +171,7 @@ export const sampleAnonymousUser: User = {
   addressWard: null,
   addressDistrict: null,
   addressCity: 'Hà Nội',
+  fcmTokens: [],
   createdAt: baseDate,
   updatedAt: updatedDate,
 };
@@ -372,6 +376,7 @@ export function createMockUser(overrides: Partial<User> = {}): User {
     addressWard: null,
     addressDistrict: null,
     addressCity: 'Hà Nội',
+    fcmTokens: [],
     createdAt: baseDate,
     updatedAt: updatedDate,
     ...overrides,

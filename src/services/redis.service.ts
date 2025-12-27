@@ -15,6 +15,9 @@ const REDIS_KEYS = {
   SEARCH_COURT_NAMES: 'search:courts', // Hash: courtId -> court name
   SEARCH_CACHE_PREFIX: 'search:cache',
   SEARCH_POPULAR: 'search:popular',
+  // Match join queue keys
+  MATCH_JOIN_QUEUE_PREFIX: 'match:join:queue',      // Sorted set: matchId -> userId with timestamp score
+  MATCH_PLAYER_LOCK_PREFIX: 'match:player:lock',    // Lock for preventing duplicate join requests
 } as const;
 
 const SEARCH_CACHE_TTL_SECONDS = 300; // 5 minutes
@@ -483,6 +486,105 @@ class RedisService {
    */
   private normalizeSearchTerm(term: string): string {
     return term.toLowerCase().trim();
+  }
+
+  // ============================================
+  // MATCH JOIN QUEUE METHODS
+  // ============================================
+
+  /**
+   * Build the Redis key for a match join queue
+   */
+  private buildMatchJoinQueueKey(matchId: string): string {
+    return `${REDIS_KEYS.MATCH_JOIN_QUEUE_PREFIX}:${matchId}`;
+  }
+
+  /**
+   * Build the Redis key for a player lock
+   */
+  private buildMatchPlayerLockKey(matchId: string, userId: string): string {
+    return `${REDIS_KEYS.MATCH_PLAYER_LOCK_PREFIX}:${matchId}:${userId}`;
+  }
+
+  /**
+   * Acquire a lock to prevent duplicate join requests
+   * Returns true if lock acquired, false if already exists
+   * Lock expires in 60 seconds to prevent stale locks
+   */
+  async acquireMatchPlayerLock(matchId: string, userId: string): Promise<boolean> {
+    const key = this.buildMatchPlayerLockKey(matchId, userId);
+    const result = await this.getClient().set(key, '1', 'EX', 60, 'NX');
+    return result === 'OK';
+  }
+
+  /**
+   * Release a player lock
+   */
+  async releaseMatchPlayerLock(matchId: string, userId: string): Promise<void> {
+    const key = this.buildMatchPlayerLockKey(matchId, userId);
+    await this.getClient().del(key);
+  }
+
+  /**
+   * Add a user to the match join queue
+   * Uses timestamp as score for ordering
+   */
+  async addToMatchJoinQueue(matchId: string, userId: string): Promise<void> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    const score = Date.now();
+    await this.getClient().zadd(key, score, userId);
+  }
+
+  /**
+   * Remove a user from the match join queue
+   */
+  async removeFromMatchJoinQueue(matchId: string, userId: string): Promise<void> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    await this.getClient().zrem(key, userId);
+  }
+
+  /**
+   * Get a user's position in the match join queue (1-indexed)
+   * Returns null if user is not in the queue
+   */
+  async getMatchJoinQueuePosition(matchId: string, userId: string): Promise<number | null> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    const rank = await this.getClient().zrank(key, userId);
+    return rank !== null ? rank + 1 : null;
+  }
+
+  /**
+   * Get all members of the match join queue
+   * Returns user IDs in order of join time (oldest first)
+   */
+  async getMatchJoinQueueMembers(matchId: string): Promise<string[]> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    return this.getClient().zrange(key, 0, -1);
+  }
+
+  /**
+   * Get the size of the match join queue
+   */
+  async getMatchJoinQueueSize(matchId: string): Promise<number> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    return this.getClient().zcard(key);
+  }
+
+  /**
+   * Check if a user is in the match join queue
+   */
+  async isInMatchJoinQueue(matchId: string, userId: string): Promise<boolean> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    const score = await this.getClient().zscore(key, userId);
+    return score !== null;
+  }
+
+  /**
+   * Clear the entire match join queue (when match is cancelled or completed)
+   */
+  async clearMatchJoinQueue(matchId: string): Promise<void> {
+    const key = this.buildMatchJoinQueueKey(matchId);
+    await this.getClient().del(key);
   }
 
   /**

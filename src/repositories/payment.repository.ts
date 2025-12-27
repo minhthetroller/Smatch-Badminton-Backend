@@ -179,6 +179,138 @@ export class PaymentRepository {
     });
     return count > 0;
   }
+
+  // ==================== MATCH PAYMENT METHODS ====================
+
+  /**
+   * Create a payment for match join
+   */
+  async createMatchPayment(
+    data: {
+      matchPlayerId: string;
+      appTransId: string;
+      amount: number;
+      orderUrl?: string;
+    },
+    tx?: Prisma.TransactionClient
+  ) {
+    const client = tx || prisma;
+    return client.payment.create({
+      data: {
+        matchPlayerId: data.matchPlayerId,
+        paymentType: 'MATCH_JOIN',
+        appTransId: data.appTransId,
+        amount: data.amount,
+        orderUrl: data.orderUrl,
+        status: 'pending',
+      },
+    });
+  }
+
+  /**
+   * Find payment by match player ID
+   */
+  async findByMatchPlayerId(matchPlayerId: string) {
+    return prisma.payment.findMany({
+      where: { matchPlayerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Find latest pending payment for a match player
+   */
+  async findLatestPendingByMatchPlayerId(matchPlayerId: string) {
+    return prisma.payment.findFirst({
+      where: {
+        matchPlayerId,
+        status: 'pending',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Check if match player has any successful payment
+   */
+  async hasSuccessfulMatchPayment(matchPlayerId: string): Promise<boolean> {
+    const count = await prisma.payment.count({
+      where: {
+        matchPlayerId,
+        status: 'success',
+      },
+    });
+    return count > 0;
+  }
+
+  /**
+   * Find pending match join payments for expiration
+   */
+  async findExpiredPendingMatchPayments(minutesOld: number) {
+    const cutoffTime = new Date(Date.now() - minutesOld * 60 * 1000);
+    return prisma.payment.findMany({
+      where: {
+        paymentType: 'MATCH_JOIN',
+        status: 'pending',
+        createdAt: {
+          lt: cutoffTime,
+        },
+      },
+      include: {
+        matchPlayer: {
+          include: {
+            match: true,
+            user: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Find payment by ID with match player details
+   */
+  async findByIdWithMatchPlayer(id: string) {
+    return prisma.payment.findUnique({
+      where: { id },
+      include: {
+        booking: {
+          include: {
+            subCourt: {
+              include: {
+                court: true,
+              },
+            },
+          },
+        },
+        matchPlayer: {
+          include: {
+            match: {
+              include: {
+                court: true,
+                host: {
+                  select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    username: true,
+                  },
+                },
+              },
+            },
+            user: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                username: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  }
 }
 
 export const paymentRepository = new PaymentRepository();

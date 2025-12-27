@@ -92,5 +92,25 @@ router.delete('/account', requireRegisteredUser, (req, res, next) =>
   authController.deleteAccount(req, res, next)
 );
 
+// ==================== FCM Token Routes ====================
+
+/**
+ * POST /auth/fcm-token
+ * Register FCM token for push notifications
+ * Requires: authenticated user
+ */
+router.post('/fcm-token', requireAuth, (req, res, next) =>
+  authController.registerFcmToken(req, res, next)
+);
+
+/**
+ * DELETE /auth/fcm-token
+ * Unregister FCM token
+ * Requires: authenticated user
+ */
+router.delete('/fcm-token', requireAuth, (req, res, next) =>
+  authController.unregisterFcmToken(req, res, next)
+);
+
 export { router as authRoutes };
 

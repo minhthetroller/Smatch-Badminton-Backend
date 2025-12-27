@@ -1,5 +1,6 @@
 import type { Response, NextFunction } from 'express';
 import { userService } from '../services/index.js';
+import { userRepository } from '../repositories/user.repository.js';
 import { sendSuccess } from '../utils/response.js';
 import { AppError } from '../utils/errors.js';
 import type { AuthRequest } from '../middlewares/auth.middleware.js';
@@ -12,6 +13,7 @@ import type {
   LookupUsernameDto,
   mapUserToDto,
 } from '../types/auth.types.js';
+import type { RegisterFcmTokenDto } from '../types/notification.types.js';
 import { mapUserToDto as mapUser } from '../types/auth.types.js';
 
 export class AuthController {
@@ -258,6 +260,62 @@ export class AuthController {
       sendSuccess(res, {
         linkedCount,
         message: `${linkedCount} booking(s) linked to your account`,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // ==================== FCM TOKEN ENDPOINTS ====================
+
+  /**
+   * POST /auth/fcm-token
+   * Register FCM token for push notifications
+   * Requires: authenticated user
+   */
+  async registerFcmToken(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new AppError('Authentication required', 401, 'UNAUTHENTICATED');
+      }
+
+      const { token }: RegisterFcmTokenDto = req.body;
+
+      if (!token || typeof token !== 'string' || token.trim().length === 0) {
+        throw new AppError('Valid FCM token is required', 400, 'INVALID_FCM_TOKEN');
+      }
+
+      await userRepository.addFcmToken(req.user.id, token.trim());
+
+      sendSuccess(res, {
+        message: 'FCM token registered successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * DELETE /auth/fcm-token
+   * Unregister FCM token (on logout or when user disables notifications)
+   * Requires: authenticated user
+   */
+  async unregisterFcmToken(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new AppError('Authentication required', 401, 'UNAUTHENTICATED');
+      }
+
+      const { token }: RegisterFcmTokenDto = req.body;
+
+      if (!token || typeof token !== 'string' || token.trim().length === 0) {
+        throw new AppError('Valid FCM token is required', 400, 'INVALID_FCM_TOKEN');
+      }
+
+      await userRepository.removeFcmToken(req.user.id, token.trim());
+
+      sendSuccess(res, {
+        message: 'FCM token unregistered successfully',
       });
     } catch (error) {
       next(error);
