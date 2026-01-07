@@ -231,19 +231,27 @@ jobs:
             
             cd \$APP_DIR
             
+            # Remove old dist folder to ensure clean deployment
+            echo "Removing old dist folder..."
+            rm -rf dist/
+            
             # Extract new deployment
+            echo "Extracting new deployment package..."
             tar -xzf /tmp/deploy.tar.gz
             rm /tmp/deploy.tar.gz
             
             # Write .env from secret
+            echo "Writing environment variables..."
             cat > .env << 'ENVEOF'
           ${{ secrets.ENV_FILE }}
           ENVEOF
             
             # Install production dependencies only
+            echo "Installing production dependencies..."
             npm ci --omit=dev
             
             # Generate Prisma client
+            echo "Generating Prisma client..."
             npx prisma generate
             
             # Backup database before migration (optional but recommended)
@@ -254,10 +262,13 @@ jobs:
             echo "Deploying migrations..."
             npx prisma migrate deploy
             
-            # Delete any existing arc-badminton processes to rename with new version
+            # Stop old PM2 processes gracefully
+            echo "Stopping old PM2 processes..."
+            pm2 stop all 2>/dev/null || true
             pm2 delete all 2>/dev/null || true
             
-            # Start process with version name
+            # Start new process with version name
+            echo "Starting new PM2 process..."
             pm2 start dist/index.js --name "\${APP_NAME}-v\${VERSION}" --update-env
             
             echo "Deployed version: \$VERSION"
@@ -265,9 +276,25 @@ jobs:
             
             # Save PM2 process list
             pm2 save
+            
+            # Force restart to ensure new code is loaded
+            echo "Restarting to ensure new code is loaded..."
+            pm2 restart "\${APP_NAME}-v\${VERSION}"
           ENDSSH
 
       - name: Health check
         run: |
-          sleep 5
-          curl -f --retry 3 --retry-delay 5 http://${{ secrets.EC2_HOST }}/health || echo "Health check endpoint not available"
+          echo "Waiting for application to start..."
+          sleep 10
+          echo "Performing health check..."
+          curl -f --retry 5 --retry-delay 10 http://${{ secrets.EC2_HOST }}/health || echo "Health check endpoint not available"
+          
+      - name: Verify deployment
+        run: |
+          ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << ENDSSH
+            echo "=== PM2 Process List ==="
+            pm2 list
+            echo ""
+            echo "=== PM2 Logs (last 20 lines) ==="
+            pm2 logs --lines 20 --nostream
+          ENDSSH
