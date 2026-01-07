@@ -1,5 +1,8 @@
 import express, { type Express } from 'express';
 import { createServer } from 'http';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { config, initializeS3Client } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { apiRoutes } from './routes/index.js';
@@ -7,8 +10,20 @@ import { docsRoutes } from './routes/docs.routes.js';
 import { errorHandler, notFoundHandler } from './middlewares/index.js';
 import { websocketService, redisService, schedulerService, s3Service } from './services/index.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const app: Express = express();
 const server = createServer(app);
+
+// Load version info
+let versionInfo: any = { version: 'unknown' };
+try {
+  const versionPath = join(__dirname, '../version.json');
+  versionInfo = JSON.parse(readFileSync(versionPath, 'utf-8'));
+} catch {
+  // version.json not found, will use fallback
+}
 
 // Middleware
 app.use(express.json());
@@ -21,6 +36,11 @@ app.get('/health', (_req, res) => {
     timestamp: new Date().toISOString(),
     wsConnections: websocketService.getConnectionCount(),
   });
+});
+
+// Version endpoint
+app.get('/version', (_req, res) => {
+  res.json(versionInfo);
 });
 
 // API Documentation (Swagger UI)

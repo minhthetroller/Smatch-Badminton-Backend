@@ -189,11 +189,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "SHA=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+          echo "Deploying commit: ${GITHUB_SHA:0:7}"
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
+
+      - name: Verify build artifacts
+        run: |
+          echo "=== Build artifacts downloaded ==="
+          ls -lah dist/
+          echo ""
+          echo "=== Package version ==="
+          cat package.json | grep '"version"'
 
       - name: Setup SSH
         run: |
@@ -202,8 +217,24 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Create version file
+        run: |
+          cat > version.json << EOF
+          {
+            "version": "$(node -p "require('./package.json').version")",
+            "commit": "${{ steps.commit.outputs.SHA }}",
+            "commitShort": "${{ steps.commit.outputs.SHORT_SHA }}",
+            "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "branch": "${{ github.ref_name }}"
+          }
+          EOF
+          cat version.json
+
       - name: Create deployment package
-        run: tar -czf deploy.tar.gz dist/ package.json package-lock.json prisma/
+        run: |
+          tar -czf deploy.tar.gz dist/ package.json package-lock.json prisma/ version.json
+          echo "=== Deployment package contents ==="
+          tar -tzf deploy.tar.gz | head -20
 
       - name: Copy to EC2
         run: scp deploy.tar.gz ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/tmp/
@@ -231,9 +262,18 @@ jobs:
             
             cd \$APP_DIR
             
-            # Remove old dist folder to ensure clean deployment
-            echo "Removing old dist folder..."
-            rm -rf dist/
+            # Show current state
+            echo "=== Current deployment info ==="
+            if [ -f version.json ]; then
+              cat version.json
+            else
+              echo "No version.json found (first deployment?)"
+            fi
+            echo ""
+            
+            # Remove old dist and node_modules to ensure clean deployment
+            echo "Removing old dist folder and node_modules..."
+            rm -rf dist/ node_modules/
             
             # Extract new deployment
             echo "Extracting new deployment package..."
@@ -280,6 +320,11 @@ jobs:
             # Force restart to ensure new code is loaded
             echo "Restarting to ensure new code is loaded..."
             pm2 restart "\${APP_NAME}-v\${VERSION}"
+            
+            # Show deployed version
+            echo ""
+            echo "=== Deployed version info ==="
+            cat version.json
           ENDSSH
 
       - name: Health check
@@ -288,13 +333,28 @@ jobs:
           sleep 10
           echo "Performing health check..."
           curl -f --retry 5 --retry-delay 10 http://${{ secrets.EC2_HOST }}/health || echo "Health check endpoint not available"
+          echo ""
+          echo "Checking deployed version..."
+          curl -s http://${{ secrets.EC2_HOST }}/version | jq '.' || echo "Version endpoint not available"
           
       - name: Verify deployment
         run: |
           ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << ENDSSH
+            cd /home/ubuntu/arc_badminton
+            echo "=== Deployed Version ==="
+            cat version.json
+            echo ""
             echo "=== PM2 Process List ==="
             pm2 list
             echo ""
             echo "=== PM2 Logs (last 20 lines) ==="
             pm2 logs --lines 20 --nostream
+            echo ""
+            echo "=== Disk Usage ==="
+            du -sh dist/ node_modules/ 2>/dev/null || true
           ENDSSH
+          
+          echo ""
+          echo "✅ Deployment completed successfully!"
+          echo "📦 Version: $(cat version.json | grep '\"version\"' | cut -d'"' -f4 || echo 'unknown')"
+          echo "🔖 Commit: ${{ steps.commit.outputs.SHORT_SHA }}"
