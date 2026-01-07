@@ -14,6 +14,24 @@ info:
     - **Exchange Matches**: Create and join badminton matches with other players
     
     ## Changelog
+    ### v2.4.1 (2025-12-31)
+    - **Expired Match Filtering**: Implemented query-time filtering for expired matches across all match endpoints
+      - By default, all match queries return only non-expired (future) matches where `(date + end_time) > NOW()`
+      - Added `includeExpired` query parameter to `GET /api/matches`, `GET /api/matches/hosted`, and `GET /api/matches/joined`
+      - Use `includeExpired=true` to retrieve full match history including past/expired matches
+      - Added PostgreSQL expression index `idx_matches_datetime_end` on `(date + end_time, status)` for optimal query performance
+      - Timezone-aware filtering using Asia/Ho_Chi_Minh timezone
+    
+    ### v2.4.0 (2025-12-29)
+    - **LocalStack S3 Integration**: Added LocalStack service for local S3 simulation
+    - **Image Upload & Compression**: All images compressed with JPEG quality 80 before storage
+    - **Profile Photo Upload**: Added `POST /api/auth/me/photo` endpoint for profile image upload (multipart/form-data, max 5MB)
+    - **Google Login Auto-Population**: Automatically populates `username` from `displayName` and `photoUrl` from Google photo for new and existing users with empty fields
+    - **Match Image Upload**: `POST /api/matches` now accepts multipart/form-data with up to 3 images (max 5MB each, JPEG/PNG/WebP)
+    - **Match Filtering**: `GET /api/matches` now filters out matches the authenticated user has already joined
+    - **Schedule Conflict Prevention**: Match join now prevents scheduling conflicts - users cannot join multiple matches with overlapping time ranges on the same day
+    - **Backfill Script**: Added `npm run backfill:google-users` script to migrate existing Google users
+    
     ### v2.3.0 (2025-12-27)
     - Added `POST /api/matches/{id}/payment` for ZaloPay match join payments
     - Added `GET /api/matches/{id}/payment/{paymentId}/status` for payment status query
@@ -23,7 +41,7 @@ info:
     - Updated error responses to include machine-readable `code` field
     - Aligned SkillLevel enum: TBY, Y, Y_PLUS, Y_PLUS_PLUS, TBK, TB, TB_PLUS, TB_PLUS_PLUS, K, K_PLUS, GIOI
     - Aligned PlayerFormat enum: SINGLE_MALE, SINGLE_FEMALE, DOUBLE_MALE, DOUBLE_FEMALE, MIXED_DOUBLE, ANY
-  version: 2.3.0
+  version: 2.4.1
   contact:
     name: API Support
   license:
@@ -50,6 +68,8 @@ tags:
     description: ZaloPay payment integration
   - name: Matches
     description: Exchange match creation and joining
+  - name: Images
+    description: Image access via S3 proxy
   - name: Map Tiles
     description: Vector map tiles
   - name: Admin
@@ -247,6 +267,89 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Username already taken
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/me/photo:
+    post:
+      tags:
+        - Auth
+      summary: Upload profile photo
+      description: |
+        Upload a profile photo for the authenticated user.
+        
+        **Image Requirements:**
+        - Format: JPEG, PNG, or WebP
+        - Max size: 5MB
+        - Automatically compressed and resized to 500x500px
+        - Stored in S3 with JPEG format (quality 85)
+        
+        The old profile photo will be automatically deleted if one exists.
+      operationId: uploadProfilePhoto
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: The profile image file to upload
+      responses:
+        '201':
+          description: Profile photo uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/UserProfile'
+                      photoUrl:
+                        type: string
+                        format: uri
+                        example: 'http://localhost:4566/smatch-profiles/users/123/profile/1234567890.jpg'
+        '400':
+          description: Invalid file or request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noFile:
+                  value:
+                    success: false
+                    error:
+                      message: No image file provided
+                      code: NO_FILE_PROVIDED
+                invalidType:
+                  value:
+                    success: false
+                    error:
+                      message: Invalid file type. Only image/jpeg, image/jpg, image/png, image/webp are allowed.
+                      code: INVALID_FILE_TYPE
+                tooLarge:
+                  value:
+                    success: false
+                    error:
+                      message: File too large. Maximum size is 5MB.
+                      code: FILE_TOO_LARGE
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
@@ -1290,6 +1393,74 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  # ==================== S3 Proxy Endpoints ====================
+
+  /api/s3-proxy/{bucket}/{key}:
+    get:
+      tags:
+        - Images
+      summary: Get image from S3 storage
+      description: |
+        Proxy endpoint for accessing images stored in S3 (LocalStack in development).
+        All image URLs returned by the API (profile photos, match images) use this proxy route.
+        
+        **Development**: Images are stored in LocalStack S3 and proxied through this endpoint.
+        **Production**: Images are stored in AWS S3 and proxied through this endpoint.
+        
+        **URL Format**: `http://localhost:3000/api/s3-proxy/{bucket}/{key}`
+        
+        **Examples**:
+        - Profile photo: `/api/s3-proxy/smatch-photos/users/uuid/profile.jpg`
+        - Match image: `/api/s3-proxy/smatch-photos/matches/uuid/image-1.jpg`
+        
+        **Note**: You don't need to construct these URLs manually. The API automatically returns
+        proxied URLs in all responses (user profiles, match listings, etc.).
+      operationId: getS3Image
+      security: []
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          description: S3 bucket name
+          schema:
+            type: string
+            example: smatch-photos
+        - name: key
+          in: path
+          required: true
+          description: S3 object key (full path including folders)
+          schema:
+            type: string
+            example: users/123e4567-e89b-12d3-a456-426614174000/profile.jpg
+      responses:
+        '200':
+          description: Image file
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: S3 service error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   # ==================== Match (Exchange) Endpoints ====================
 
   /api/matches:
@@ -1300,6 +1471,13 @@ paths:
       description: |
         Get paginated list of exchange matches with optional filters.
         Use this to discover matches looking for players.
+        
+        **⚠️ Important**: If authenticated, the response will automatically **exclude matches you have already joined** (status=ACCEPTED).
+        This ensures you only see matches available for you to join.
+        
+        **Expired Match Filtering**:
+        - **Default behavior** (`includeExpired=false` or omitted): Returns only **non-expired matches** where `(date + end_time) > NOW()`
+        - **Full history** (`includeExpired=true`): Returns **all matches** including past/expired ones
       operationId: listMatches
       security: []
       parameters:
@@ -1342,6 +1520,12 @@ paths:
           schema:
             type: string
             format: date
+        - name: includeExpired
+          in: query
+          description: "Include expired/past matches (default: false)"
+          schema:
+            type: boolean
+            default: false
         - name: page
           in: query
           description: Page number
@@ -1372,7 +1556,12 @@ paths:
         
         **Authentication Required**: Requires a registered (non-anonymous) user.
         
-        **Images**: Provide S3 URLs for match images. Frontend should upload to S3 first.
+        **Image Upload Options**:
+        1. **Multipart/form-data (Recommended)**: Upload up to 3 images directly with the request
+           - Images will be automatically compressed and stored in S3
+           - **Requirements**: JPEG, PNG, or WebP format, max 5MB per file
+           - Images compressed to max 1920x1080 with JPEG quality 80
+        2. **JSON with URLs**: Provide pre-uploaded S3 URLs in the `images` array
         
         **Privacy**: 
         - Public matches (isPrivate: false): Players join immediately
@@ -1383,6 +1572,86 @@ paths:
       requestBody:
         required: true
         content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - courtId
+                - skillLevel
+                - shuttleType
+                - playerFormat
+                - date
+                - startTime
+                - endTime
+                - price
+                - slotsNeeded
+              properties:
+                courtId:
+                  type: string
+                  format: uuid
+                  description: Court UUID
+                title:
+                  type: string
+                  maxLength: 255
+                  description: Match title
+                description:
+                  type: string
+                  description: Detailed match description
+                skillLevel:
+                  $ref: '#/components/schemas/SkillLevel'
+                shuttleType:
+                  $ref: '#/components/schemas/ShuttleType'
+                playerFormat:
+                  $ref: '#/components/schemas/PlayerFormat'
+                date:
+                  type: string
+                  format: date
+                  description: Match date (YYYY-MM-DD)
+                startTime:
+                  type: string
+                  pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+                  description: Start time (HH:mm, 24-hour)
+                  example: "18:00"
+                endTime:
+                  type: string
+                  pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+                  description: End time (HH:mm, 24-hour)
+                  example: "20:00"
+                isPrivate:
+                  type: boolean
+                  default: false
+                  description: Whether host approval is required
+                price:
+                  type: integer
+                  minimum: 0
+                  description: Price per player in VND
+                slotsNeeded:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+                  description: Number of players needed
+                images:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  maxItems: 3
+                  description: Up to 3 match images (max 5MB each, JPEG/PNG/WebP)
+            examples:
+              withImages:
+                summary: Multipart with image files
+                value:
+                  courtId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                  title: "Đánh giao lưu cuối tuần"
+                  skillLevel: "TB_PLUS"
+                  shuttleType: "TC77"
+                  playerFormat: "DOUBLE_MALE"
+                  date: "2025-12-28"
+                  startTime: "18:00"
+                  endTime: "20:00"
+                  price: 50000
+                  slotsNeeded: 3
+                  # images: [binary file 1, binary file 2]
           application/json:
             schema:
               $ref: '#/components/schemas/CreateMatchRequest'
@@ -1447,7 +1716,12 @@ paths:
       tags:
         - Matches
       summary: Get matches hosted by current user
-      description: Get all matches created by the authenticated user
+      description: |
+        Get all matches created by the authenticated user.
+        
+        **Expired Match Filtering**:
+        - **Default behavior** (`includeExpired=false` or omitted): Returns only **non-expired matches** (future matches)
+        - **Full history** (`includeExpired=true`): Returns **all hosted matches** including past/expired ones
       operationId: getHostedMatches
       security:
         - BearerAuth: []
@@ -1457,6 +1731,12 @@ paths:
           description: Filter by match status
           schema:
             $ref: '#/components/schemas/MatchStatus'
+        - name: includeExpired
+          in: query
+          description: "Include expired/past matches for full history (default: false)"
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: List of hosted matches
@@ -1476,10 +1756,22 @@ paths:
       tags:
         - Matches
       summary: Get matches joined by current user
-      description: Get all matches the authenticated user has joined or requested to join
+      description: |
+        Get all matches the authenticated user has joined or requested to join.
+        
+        **Expired Match Filtering**:
+        - **Default behavior** (`includeExpired=false` or omitted): Returns only **non-expired matches** (future matches)
+        - **Full history** (`includeExpired=true`): Returns **all joined matches** including past/expired ones
       operationId: getJoinedMatches
       security:
         - BearerAuth: []
+      parameters:
+        - name: includeExpired
+          in: query
+          description: "Include expired/past matches for full history (default: false)"
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           description: List of joined matches
@@ -1499,9 +1791,31 @@ paths:
       tags:
         - Matches
       summary: Get match by ID
-      description: Get detailed match information including all players
+      description: |
+        Get detailed match information including all players.
+        
+        **Authentication (Optional):** If an authenticated user makes this request, the response includes 
+        `currentUserStatus` with their participation status in the match.
+        
+        **currentUserStatus Values:**
+        - `null`: User has not requested to join this match
+        - `PENDING`: User has requested to join, awaiting host approval (private matches)
+        - `ACCEPTED`: User has been accepted and joined the match (free matches)
+        - `PENDING_PAYMENT`: User has been approved but needs to complete payment (paid matches)
+        - `REJECTED`: User's join request was rejected
+        - `LEFT`: User left the match
+        - `EXPIRED`: User's payment expired
+        
+        This helps the frontend determine which button to show:
+        - No status → "Request to Join" button
+        - `PENDING` → "Pending Approval" (disabled)
+        - `PENDING_PAYMENT` → "Pay Now" button
+        - `ACCEPTED` → "Already Joined" or "Leave Match" button
+        - `REJECTED` → "Request Rejected" (disabled)
       operationId: getMatchById
-      security: []
+      security:
+        - BearerAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -1516,7 +1830,85 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchWithPlayersResponse'
+                allOf:
+                  - $ref: '#/components/schemas/MatchWithPlayersResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          currentUserStatus:
+                            type: object
+                            nullable: true
+                            description: |
+                              Current authenticated user's participation status (null if not a participant or not authenticated)
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                                description: MatchPlayer record ID - use this for responding to requests
+                              status:
+                                $ref: '#/components/schemas/MatchPlayerStatus'
+                              position:
+                                type: integer
+                                nullable: true
+                                description: Player position in the match (if assigned)
+                              requestedAt:
+                                type: string
+                                format: date-time
+                                description: When the join request was made
+                              respondedAt:
+                                type: string
+                                format: date-time
+                                nullable: true
+                                description: When the host responded (if applicable)
+              examples:
+                withPendingPayment:
+                  summary: User approved but pending payment
+                  value:
+                    success: true
+                    data:
+                      id: "550e8400-e29b-41d4-a716-446655440000"
+                      courtName: "Badminton Court A"
+                      title: "Looking for doubles partner"
+                      isPrivate: true
+                      price: 50000
+                      players: []
+                      currentUserStatus:
+                        id: "550e8400-e29b-41d4-a716-446655440001"
+                        status: "PENDING_PAYMENT"
+                        position: 1
+                        requestedAt: "2025-12-31T10:00:00.000Z"
+                        respondedAt: "2025-12-31T10:05:00.000Z"
+                withPending:
+                  summary: User request pending approval
+                  value:
+                    success: true
+                    data:
+                      id: "550e8400-e29b-41d4-a716-446655440000"
+                      courtName: "Badminton Court A"
+                      title: "Looking for doubles partner"
+                      isPrivate: true
+                      price: 50000
+                      players: []
+                      currentUserStatus:
+                        id: "550e8400-e29b-41d4-a716-446655440001"
+                        status: "PENDING"
+                        position: null
+                        requestedAt: "2025-12-31T10:00:00.000Z"
+                        respondedAt: null
+                notParticipant:
+                  summary: User has not joined
+                  value:
+                    success: true
+                    data:
+                      id: "550e8400-e29b-41d4-a716-446655440000"
+                      courtName: "Badminton Court A"
+                      title: "Looking for doubles partner"
+                      isPrivate: true
+                      price: 50000
+                      players: []
+                      currentUserStatus: null
         '404':
           description: Match not found
           content:
@@ -1637,6 +2029,16 @@ paths:
         **Public matches**: Player is immediately accepted (if slots available)
         **Private matches**: Request is pending until host approves
         
+        **⚠️ Schedule Conflict Prevention**: 
+        The system automatically checks for scheduling conflicts before allowing you to join.
+        You **cannot join** a match if you already have an accepted match on the same day with **overlapping time ranges**.
+        
+        Examples of conflicts:
+        - Existing: 14:00-16:00, New: 15:00-17:00 ❌ (overlaps)
+        - Existing: 14:00-16:00, New: 15:30-17:30 ❌ (overlaps)
+        - Existing: 14:00-16:00, New: 16:00-18:00 ✅ (no overlap, end time = start time is allowed)
+        - Existing: 10:00-12:00, New: 14:00-16:00 ✅ (no overlap)
+        
         WebSocket notifications are sent to the host for new requests.
       operationId: joinMatch
       security:
@@ -1689,11 +2091,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: Already requested or match is full
+          description: Already requested, match is full, or schedule conflict
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                scheduleConflict:
+                  summary: Schedule conflict detected
+                  value:
+                    success: false
+                    error:
+                      message: "You have scheduling conflicts with: Đánh giao lưu cuối tuần. Cannot join matches with overlapping times."
+                      code: "SCHEDULE_CONFLICT"
+                alreadyJoined:
+                  summary: Already a player
+                  value:
+                    success: false
+                    error:
+                      message: "You are already a player in this match"
+                      code: "CONFLICT"
 
   /api/matches/{id}/leave:
     delete:
@@ -1738,6 +2155,151 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/matches/{id}/requests:
+    get:
+      tags:
+        - Matches
+      summary: Get join requests for a match
+      description: |
+        Get all join requests for a match (host only).
+        
+        **Features:**
+        - Only the match host can view join requests
+        - Returns all players who have requested to join, with their current status
+        - Optional status filter to get only PENDING, ACCEPTED, REJECTED, or PENDING_PAYMENT requests
+        - Results ordered by status (ascending) and request time (oldest first)
+        - Includes user profile information (name, photo, etc.)
+        
+        **Use Cases:**
+        - Host wants to see all pending join requests to approve/reject
+        - Host wants to see all accepted players
+        - Host wants to see players pending payment after approval
+        - Host wants to review rejected requests
+        
+        **Status Filter Values:**
+        - `PENDING`: Join requests awaiting host approval (private matches only)
+        - `ACCEPTED`: Players who have been accepted and joined (free matches)
+        - `PENDING_PAYMENT`: Players approved but awaiting payment (paid matches)
+        - `REJECTED`: Players whose join requests were rejected
+        - No filter: Returns all players regardless of status
+        
+        **Response Includes:**
+        - Player ID, user ID, username, photo URL
+        - Request status and position (if assigned)
+        - Request message from player (if provided)
+        - Request timestamp and response timestamp
+      operationId: getJoinRequests
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Match UUID
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          description: Filter by player status (PENDING, ACCEPTED, REJECTED, PENDING_PAYMENT)
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - ACCEPTED
+              - REJECTED
+              - PENDING_PAYMENT
+      responses:
+        '200':
+          description: List of join requests
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/MatchPlayer'
+              examples:
+                allRequests:
+                  summary: All join requests (no filter)
+                  value:
+                    success: true
+                    data:
+                      - id: "550e8400-e29b-41d4-a716-446655440001"
+                        matchId: "550e8400-e29b-41d4-a716-446655440000"
+                        userId: "user123"
+                        userName: "John Doe"
+                        userPhotoUrl: "https://example.com/photo.jpg"
+                        status: "PENDING"
+                        message: "I'd love to join!"
+                        position: null
+                        requestedAt: "2025-12-31T10:00:00.000Z"
+                        respondedAt: null
+                      - id: "550e8400-e29b-41d4-a716-446655440002"
+                        matchId: "550e8400-e29b-41d4-a716-446655440000"
+                        userId: "user456"
+                        userName: "Jane Smith"
+                        userPhotoUrl: "https://example.com/photo2.jpg"
+                        status: "PENDING_PAYMENT"
+                        message: null
+                        position: 1
+                        requestedAt: "2025-12-31T10:05:00.000Z"
+                        respondedAt: "2025-12-31T10:10:00.000Z"
+                pendingOnly:
+                  summary: Pending requests only (status=PENDING)
+                  value:
+                    success: true
+                    data:
+                      - id: "550e8400-e29b-41d4-a716-446655440001"
+                        matchId: "550e8400-e29b-41d4-a716-446655440000"
+                        userId: "user123"
+                        userName: "John Doe"
+                        userPhotoUrl: "https://example.com/photo.jpg"
+                        status: "PENDING"
+                        message: "I'd love to join!"
+                        position: null
+                        requestedAt: "2025-12-31T10:00:00.000Z"
+                        respondedAt: null
+        '400':
+          description: Invalid request (bad match ID format or invalid status filter)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: "BAD_REQUEST"
+                  message: "Invalid status. Must be one of: PENDING, ACCEPTED, REJECTED, PENDING_PAYMENT"
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Only the host can view join requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: "FORBIDDEN"
+                  message: "Only the host can view join requests"
+        '404':
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/matches/{id}/requests/{playerId}/respond:
     post:
       tags:
@@ -1745,6 +2307,14 @@ paths:
       summary: Respond to join request
       description: |
         Accept or reject a player's join request (host only, for private matches).
+        
+        **IMPORTANT:** The `playerId` parameter must be the MatchPlayer `id` field (from `GET /api/matches/{id}/requests` 
+        or the WebSocket join request notification), NOT the `userId`.
+        
+        **For paid matches:** When accepting, the backend automatically sets status to `PENDING_PAYMENT` 
+        instead of `ACCEPTED`. The player must then complete payment via `POST /api/matches/{id}/payment`.
+        
+        **For free matches:** Status is set directly to `ACCEPTED`.
         
         WebSocket notification is sent to the player with the result.
       operationId: respondToJoinRequest
@@ -1761,7 +2331,12 @@ paths:
         - name: playerId
           in: path
           required: true
-          description: MatchPlayer UUID (from join request)
+          description: |
+            **MatchPlayer UUID** (the `id` field from join request list or WebSocket notification).
+            
+            This is NOT the user's ID (`userId`). Get this from:
+            - `GET /api/matches/{id}/requests` → each item's `id` field
+            - WebSocket `match_join_request` notification → `playerId` field
           schema:
             type: string
             format: uuid
@@ -3128,33 +3703,55 @@ components:
 
     MatchPlayer:
       type: object
+      description: |
+        Represents a player's participation in a match.
+        
+        **IMPORTANT:** When responding to join requests (POST /api/matches/{id}/requests/{playerId}/respond),
+        use the `id` field (MatchPlayer UUID), NOT the `userId` field.
       properties:
         id:
           type: string
           format: uuid
+          description: |
+            **MatchPlayer UUID** - Use this as the `playerId` path parameter when responding to join requests.
+            This is the unique identifier for this join request/player entry.
         matchId:
           type: string
           format: uuid
+          description: The match this player entry belongs to
         userId:
           type: string
           format: uuid
+          description: |
+            **User UUID** - The ID of the user who requested to join.
+            Do NOT use this for responding to join requests.
+        userName:
+          type: string
+          description: Display name of the user
+        userPhotoUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: Profile photo URL of the user
         status:
           $ref: '#/components/schemas/MatchPlayerStatus'
-        joinedAt:
+        message:
+          type: string
+          nullable: true
+          description: Optional message from the player when requesting to join
+        position:
+          type: integer
+          nullable: true
+          description: Player position in the match (assigned after acceptance)
+        requestedAt:
           type: string
           format: date-time
-        user:
-          type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-            displayName:
-              type: string
-            avatarUrl:
-              type: string
-              format: uri
-              nullable: true
+          description: When the join request was made
+        respondedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the host responded to the request
 
     MatchWithDetails:
       allOf:
@@ -3309,13 +3906,14 @@ components:
     RespondToJoinRequest:
       type: object
       required:
-        - action
+        - status
       properties:
-        action:
+        status:
           type: string
+          description: Host decision on the join request
           enum:
-            - accept
-            - reject
+            - ACCEPTED
+            - REJECTED
 
     MatchResponse:
       allOf:

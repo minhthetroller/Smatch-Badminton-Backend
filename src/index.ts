@@ -1,11 +1,11 @@
 import express, { type Express } from 'express';
 import { createServer } from 'http';
-import { config } from './config/index.js';
+import { config, initializeS3Client } from './config/index.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { apiRoutes } from './routes/index.js';
 import { docsRoutes } from './routes/docs.routes.js';
 import { errorHandler, notFoundHandler } from './middlewares/index.js';
-import { websocketService, redisService, schedulerService } from './services/index.js';
+import { websocketService, redisService, schedulerService, s3Service } from './services/index.js';
 
 const app: Express = express();
 const server = createServer(app);
@@ -64,6 +64,15 @@ async function start(): Promise<void> {
   if (!dbConnected) {
     console.warn('⚠️  Server running without database connection. Run docker:up first.');
   } else {
+    // Initialize S3 client and create buckets
+    try {
+      initializeS3Client();
+      await s3Service.createBucket(config.aws.s3.bucketProfile);
+      await s3Service.createBucket(config.aws.s3.bucketMatches);
+    } catch (error) {
+      console.warn('⚠️  Failed to initialize S3:', error instanceof Error ? error.message : error);
+    }
+
     // Start scheduler only if database is connected
     schedulerService.start();
   }

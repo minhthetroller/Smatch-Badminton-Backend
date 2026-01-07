@@ -49,6 +49,26 @@ services:
       postgres:
         condition: service_healthy
 
+  localstack:
+    image: localstack/localstack:latest
+    container_name: arc_badminton_localstack
+    restart: unless-stopped
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    environment:
+      SERVICES: s3
+      DEBUG: 1
+      DATA_DIR: /var/lib/localstack/data
+      EDGE_PORT: 4566
+    volumes:
+      - localstack_data:/var/lib/localstack/data
+    healthcheck:
+      test: ["CMD", "awslocal", "s3", "ls"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   redis_data:
+  localstack_data:

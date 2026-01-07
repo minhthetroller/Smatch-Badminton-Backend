@@ -5,21 +5,20 @@
 
 import type { Response, NextFunction } from 'express';
 import type { AuthRequest } from '../middlewares/auth.middleware.js';
-import { matchService } from '../services/index.js';
+import { matchService, s3Service, imageService } from '../services/index.js';
+import { config } from '../config/index.js';
 import { sendSuccess, sendPaginated } from '../utils/response.js';
 import { BadRequestError } from '../utils/errors.js';
 import {
-  isValidSkillLevel,
-  isValidShuttleType,
-  isValidPlayerFormat,
+  createMatchSchema,
+  updateMatchSchema,
+  matchQuerySchema,
+  joinMatchSchema,
+  respondToRequestSchema,
+} from '../validators/match.validator.js';
+import {
   isValidMatchStatus,
-  isValidS3Url,
-  isValidTimeFormat,
-  isValidDateFormat,
   isValidUuid,
-  SKILL_LEVEL_VALUES,
-  SHUTTLE_TYPE_VALUES,
-  PLAYER_FORMAT_VALUES,
   MATCH_STATUS_VALUES,
 } from '../types/match.types.js';
 import type {
@@ -35,6 +34,7 @@ export class MatchController {
   /**
    * Create a new exchange match
    * POST /api/matches
+   * Supports both multipart/form-data (with files) and application/json (with URLs)
    */
   async create(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -43,8 +43,81 @@ export class MatchController {
         throw new BadRequestError('User not authenticated');
       }
 
-      const data = this.validateCreateMatchDto(req.body);
-      const match = await matchService.createMatch(data, userId);
+      // Handle uploaded files if present
+      let imageUrls: string[] = [];
+      if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+        // Upload files to S3
+        const uploadPromises = req.files.map(async (file, index) => {
+          const compressedBuffer = await imageService.compressMatchImage(file.buffer);
+          const timestamp = Date.now();
+          const key = `matches/temp_${userId}_${timestamp}_${index}.jpg`;
+          return await s3Service.uploadFile(
+            compressedBuffer,
+            key,
+            'image/jpeg',
+            config.aws.s3.bucketMatches
+          );
+        });
+        imageUrls = await Promise.all(uploadPromises);
+      }
+
+      // Validate and parse request body with Zod (handles type coercion for multipart/form-data)
+      const validationResult = createMatchSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        const errors = validationResult.error.issues.map((err: any) => 
+          `${err.path.join('.')}: ${err.message}`
+        ).join('; ');
+        throw new BadRequestError(errors);
+      }
+      
+      const data = validationResult.data;
+      
+      // Merge uploaded image URLs with any URLs provided in body
+      if (imageUrls.length > 0) {
+        data.images = [...imageUrls, ...(data.images || [])];
+      }
+
+      // Create match
+      const match = await matchService.createMatch(data as any, userId);
+
+      // Rename S3 files with actual match ID
+      if (imageUrls.length > 0) {
+        const renamePromises = imageUrls.map(async (url, index) => {
+          const oldKey = s3Service.extractKeyFromUrl(url);
+          if (!oldKey) return url;
+          
+          const timestamp = Date.now();
+          const newKey = `matches/${match.id}/${timestamp}_${index}.jpg`;
+          
+          // Copy to new location and delete old
+          try {
+            const buffer = await fetch(url).then(r => r.arrayBuffer()).then(b => Buffer.from(b));
+            const newUrl = await s3Service.uploadFile(
+              buffer,
+              newKey,
+              'image/jpeg',
+              config.aws.s3.bucketMatches
+            );
+            await s3Service.deleteFile(oldKey, config.aws.s3.bucketMatches);
+            return newUrl;
+          } catch (error) {
+            console.warn('Failed to rename match image:', error);
+            return url;
+          }
+        });
+        
+        const renamedUrls = await Promise.all(renamePromises);
+        
+        // Update match with renamed URLs
+        if (data.images) {
+          const otherUrls = data.images.filter(url => !imageUrls.includes(url));
+          const updatedMatch = await matchService.updateMatch(match.id, {
+            images: [...renamedUrls, ...otherUrls],
+          }, userId);
+          match.images = updatedMatch.images;
+        }
+      }
+
       sendSuccess(res, match, 201);
     } catch (error) {
       next(error);
@@ -62,7 +135,9 @@ export class MatchController {
         throw new BadRequestError('Invalid match ID format');
       }
 
-      const match = await matchService.getMatchById(id);
+      // Pass user ID to include current user's participation status
+      const userId = req.user?.id;
+      const match = await matchService.getMatchById(id, userId);
       sendSuccess(res, match);
     } catch (error) {
       next(error);
@@ -75,8 +150,18 @@ export class MatchController {
    */
   async getAll(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const params = this.validateQueryParams(req.query);
-      const { matches, total, page, limit } = await matchService.getAllMatches(params);
+      const validationResult = matchQuerySchema.safeParse(req.query);
+      if (!validationResult.success) {
+        const errors = validationResult.error.issues.map((err: any) => 
+          `${err.path.join('.')}: ${err.message}`
+        ).join('; ');
+        throw new BadRequestError(errors);
+      }
+      
+      const params = validationResult.data;
+      // Pass user ID to filter out joined matches
+      const userId = req.user?.id;
+      const { matches, total, page, limit } = await matchService.getAllMatches(params as any, userId);
       sendPaginated(res, matches, { page, limit, total });
     } catch (error) {
       next(error);
@@ -99,8 +184,16 @@ export class MatchController {
         throw new BadRequestError('Invalid match ID format');
       }
 
-      const data = this.validateUpdateMatchDto(req.body);
-      const match = await matchService.updateMatch(id, data, userId);
+      const validationResult = updateMatchSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        const errors = validationResult.error.issues.map((err: any) => 
+          `${err.path.join('.')}: ${err.message}`
+        ).join('; ');
+        throw new BadRequestError(errors);
+      }
+      
+      const data = validationResult.data;
+      const match = await matchService.updateMatch(id, data as any, userId);
       sendSuccess(res, match);
     } catch (error) {
       next(error);
@@ -146,9 +239,52 @@ export class MatchController {
         throw new BadRequestError('Invalid match ID format');
       }
 
-      const data = this.validateJoinMatchDto(req.body);
+      const validationResult = joinMatchSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        const errors = validationResult.error.issues.map((err: any) => 
+          `${err.path.join('.')}: ${err.message}`
+        ).join('; ');
+        throw new BadRequestError(errors);
+      }
+      
+      const data = validationResult.data;
       const player = await matchService.joinMatch(id, userId, data.message);
       sendSuccess(res, player, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * Get join requests for a match
+   * GET /api/matches/:id/requests
+   */
+  async getJoinRequests(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        throw new BadRequestError('User not authenticated');
+      }
+
+      const { id } = req.params;
+      if (!id || !isValidUuid(id)) {
+        throw new BadRequestError('Invalid match ID format');
+      }
+
+      // Optional status filter: PENDING, ACCEPTED, REJECTED, PENDING_PAYMENT
+      const { status } = req.query;
+      let statusFilter: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'PENDING_PAYMENT' | undefined;
+      
+      if (status) {
+        const validStatuses = ['PENDING', 'ACCEPTED', 'REJECTED', 'PENDING_PAYMENT'];
+        if (!validStatuses.includes(status as string)) {
+          throw new BadRequestError(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+        }
+        statusFilter = status as 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'PENDING_PAYMENT';
+      }
+
+      const requests = await matchService.getJoinRequests(id, userId, statusFilter);
+      sendSuccess(res, requests);
     } catch (error) {
       next(error);
     }
@@ -173,7 +309,15 @@ export class MatchController {
         throw new BadRequestError('Invalid player ID format');
       }
 
-      const data = this.validateRespondDto(req.body);
+      const validationResult = respondToRequestSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        const errors = validationResult.error.issues.map((err: any) => 
+          `${err.path.join('.')}: ${err.message}`
+        ).join('; ');
+        throw new BadRequestError(errors);
+      }
+      
+      const data = validationResult.data;
       const player = await matchService.respondToJoinRequest(id, playerId, data.status, userId);
       sendSuccess(res, player);
     } catch (error) {
@@ -220,7 +364,8 @@ export class MatchController {
         throw new BadRequestError(`Invalid status. Valid values: ${MATCH_STATUS_VALUES.join(', ')}`);
       }
 
-      const matches = await matchService.getHostedMatches(userId, status as MatchStatus | undefined);
+      const includeExpired = req.query.includeExpired === 'true';
+      const matches = await matchService.getHostedMatches(userId, status as MatchStatus | undefined, includeExpired);
       sendSuccess(res, matches);
     } catch (error) {
       next(error);
@@ -238,427 +383,14 @@ export class MatchController {
         throw new BadRequestError('User not authenticated');
       }
 
-      const matches = await matchService.getJoinedMatches(userId);
+      const includeExpired = req.query.includeExpired === 'true';
+      const matches = await matchService.getJoinedMatches(userId, includeExpired);
       sendSuccess(res, matches);
     } catch (error) {
       next(error);
     }
   }
 
-  // ==================== VALIDATION METHODS ====================
-
-  /**
-   * Validate create match DTO
-   */
-  private validateCreateMatchDto(body: unknown): CreateMatchDto {
-    if (!body || typeof body !== 'object') {
-      throw new BadRequestError('Request body is required');
-    }
-
-    const data = body as Record<string, unknown>;
-    const errors: string[] = [];
-
-    // Required: courtId
-    if (!data.courtId) {
-      errors.push('courtId is required');
-    } else if (!isValidUuid(data.courtId)) {
-      errors.push('courtId must be a valid UUID');
-    }
-
-    // Required: skillLevel
-    if (!data.skillLevel) {
-      errors.push('skillLevel is required');
-    } else if (!isValidSkillLevel(data.skillLevel)) {
-      errors.push(`skillLevel must be one of: ${SKILL_LEVEL_VALUES.join(', ')}`);
-    }
-
-    // Required: shuttleType
-    if (!data.shuttleType) {
-      errors.push('shuttleType is required');
-    } else if (!isValidShuttleType(data.shuttleType)) {
-      errors.push(`shuttleType must be one of: ${SHUTTLE_TYPE_VALUES.join(', ')}`);
-    }
-
-    // Required: playerFormat
-    if (!data.playerFormat) {
-      errors.push('playerFormat is required');
-    } else if (!isValidPlayerFormat(data.playerFormat)) {
-      errors.push(`playerFormat must be one of: ${PLAYER_FORMAT_VALUES.join(', ')}`);
-    }
-
-    // Required: date
-    if (!data.date) {
-      errors.push('date is required');
-    } else if (!isValidDateFormat(data.date)) {
-      errors.push('date must be in YYYY-MM-DD format');
-    }
-
-    // Required: startTime
-    if (!data.startTime) {
-      errors.push('startTime is required');
-    } else if (!isValidTimeFormat(data.startTime)) {
-      errors.push('startTime must be in HH:mm format (24-hour)');
-    }
-
-    // Required: endTime
-    if (!data.endTime) {
-      errors.push('endTime is required');
-    } else if (!isValidTimeFormat(data.endTime)) {
-      errors.push('endTime must be in HH:mm format (24-hour)');
-    }
-
-    // Required: price
-    if (data.price === undefined || data.price === null) {
-      errors.push('price is required');
-    } else if (typeof data.price !== 'number' || data.price < 0) {
-      errors.push('price must be a non-negative number');
-    }
-
-    // Required: slotsNeeded
-    if (data.slotsNeeded === undefined || data.slotsNeeded === null) {
-      errors.push('slotsNeeded is required');
-    } else if (typeof data.slotsNeeded !== 'number' || data.slotsNeeded < 1 || data.slotsNeeded > 20) {
-      errors.push('slotsNeeded must be a number between 1 and 20');
-    }
-
-    // Optional: title
-    if (data.title !== undefined && data.title !== null) {
-      if (typeof data.title !== 'string') {
-        errors.push('title must be a string');
-      } else if (data.title.length > 255) {
-        errors.push('title must not exceed 255 characters');
-      }
-    }
-
-    // Optional: description
-    if (data.description !== undefined && data.description !== null) {
-      if (typeof data.description !== 'string') {
-        errors.push('description must be a string');
-      }
-    }
-
-    // Optional: images (S3 URLs)
-    if (data.images !== undefined && data.images !== null) {
-      if (!Array.isArray(data.images)) {
-        errors.push('images must be an array');
-      } else if (data.images.length > 10) {
-        errors.push('Maximum 10 images allowed');
-      } else {
-        for (let i = 0; i < data.images.length; i++) {
-          if (!isValidS3Url(data.images[i])) {
-            errors.push(`images[${i}] must be a valid S3 URL (https://bucket.s3.region.amazonaws.com/...)`);
-          }
-        }
-      }
-    }
-
-    // Optional: isPrivate
-    if (data.isPrivate !== undefined && data.isPrivate !== null) {
-      if (typeof data.isPrivate !== 'boolean') {
-        errors.push('isPrivate must be a boolean');
-      }
-    }
-
-    if (errors.length > 0) {
-      throw new BadRequestError(errors.join('; '));
-    }
-
-    return {
-      courtId: data.courtId as string,
-      title: data.title as string | undefined,
-      description: data.description as string | undefined,
-      images: data.images as string[] | undefined,
-      skillLevel: data.skillLevel as CreateMatchDto['skillLevel'],
-      shuttleType: data.shuttleType as CreateMatchDto['shuttleType'],
-      playerFormat: data.playerFormat as CreateMatchDto['playerFormat'],
-      date: data.date as string,
-      startTime: data.startTime as string,
-      endTime: data.endTime as string,
-      isPrivate: data.isPrivate as boolean | undefined,
-      price: data.price as number,
-      slotsNeeded: data.slotsNeeded as number,
-    };
-  }
-
-  /**
-   * Validate update match DTO
-   */
-  private validateUpdateMatchDto(body: unknown): UpdateMatchDto {
-    if (!body || typeof body !== 'object') {
-      throw new BadRequestError('Request body is required');
-    }
-
-    const data = body as Record<string, unknown>;
-    const errors: string[] = [];
-    const result: UpdateMatchDto = {};
-
-    // Optional: title
-    if (data.title !== undefined) {
-      if (data.title !== null && typeof data.title !== 'string') {
-        errors.push('title must be a string');
-      } else if (typeof data.title === 'string' && data.title.length > 255) {
-        errors.push('title must not exceed 255 characters');
-      } else {
-        result.title = data.title as string;
-      }
-    }
-
-    // Optional: description
-    if (data.description !== undefined) {
-      if (data.description !== null && typeof data.description !== 'string') {
-        errors.push('description must be a string');
-      } else {
-        result.description = data.description as string;
-      }
-    }
-
-    // Optional: images
-    if (data.images !== undefined) {
-      if (!Array.isArray(data.images)) {
-        errors.push('images must be an array');
-      } else if (data.images.length > 10) {
-        errors.push('Maximum 10 images allowed');
-      } else {
-        for (let i = 0; i < data.images.length; i++) {
-          if (!isValidS3Url(data.images[i])) {
-            errors.push(`images[${i}] must be a valid S3 URL`);
-          }
-        }
-        result.images = data.images as string[];
-      }
-    }
-
-    // Optional: skillLevel
-    if (data.skillLevel !== undefined) {
-      if (!isValidSkillLevel(data.skillLevel)) {
-        errors.push(`skillLevel must be one of: ${SKILL_LEVEL_VALUES.join(', ')}`);
-      } else {
-        result.skillLevel = data.skillLevel as UpdateMatchDto['skillLevel'];
-      }
-    }
-
-    // Optional: shuttleType
-    if (data.shuttleType !== undefined) {
-      if (!isValidShuttleType(data.shuttleType)) {
-        errors.push(`shuttleType must be one of: ${SHUTTLE_TYPE_VALUES.join(', ')}`);
-      } else {
-        result.shuttleType = data.shuttleType as UpdateMatchDto['shuttleType'];
-      }
-    }
-
-    // Optional: playerFormat
-    if (data.playerFormat !== undefined) {
-      if (!isValidPlayerFormat(data.playerFormat)) {
-        errors.push(`playerFormat must be one of: ${PLAYER_FORMAT_VALUES.join(', ')}`);
-      } else {
-        result.playerFormat = data.playerFormat as UpdateMatchDto['playerFormat'];
-      }
-    }
-
-    // Optional: date
-    if (data.date !== undefined) {
-      if (!isValidDateFormat(data.date)) {
-        errors.push('date must be in YYYY-MM-DD format');
-      } else {
-        result.date = data.date as string;
-      }
-    }
-
-    // Optional: startTime
-    if (data.startTime !== undefined) {
-      if (!isValidTimeFormat(data.startTime)) {
-        errors.push('startTime must be in HH:mm format');
-      } else {
-        result.startTime = data.startTime as string;
-      }
-    }
-
-    // Optional: endTime
-    if (data.endTime !== undefined) {
-      if (!isValidTimeFormat(data.endTime)) {
-        errors.push('endTime must be in HH:mm format');
-      } else {
-        result.endTime = data.endTime as string;
-      }
-    }
-
-    // Optional: isPrivate
-    if (data.isPrivate !== undefined) {
-      if (typeof data.isPrivate !== 'boolean') {
-        errors.push('isPrivate must be a boolean');
-      } else {
-        result.isPrivate = data.isPrivate;
-      }
-    }
-
-    // Optional: price
-    if (data.price !== undefined) {
-      if (typeof data.price !== 'number' || data.price < 0) {
-        errors.push('price must be a non-negative number');
-      } else {
-        result.price = data.price;
-      }
-    }
-
-    // Optional: slotsNeeded
-    if (data.slotsNeeded !== undefined) {
-      if (typeof data.slotsNeeded !== 'number' || data.slotsNeeded < 1 || data.slotsNeeded > 20) {
-        errors.push('slotsNeeded must be between 1 and 20');
-      } else {
-        result.slotsNeeded = data.slotsNeeded;
-      }
-    }
-
-    // Optional: status
-    if (data.status !== undefined) {
-      if (!isValidMatchStatus(data.status)) {
-        errors.push(`status must be one of: ${MATCH_STATUS_VALUES.join(', ')}`);
-      } else {
-        result.status = data.status as UpdateMatchDto['status'];
-      }
-    }
-
-    if (errors.length > 0) {
-      throw new BadRequestError(errors.join('; '));
-    }
-
-    return result;
-  }
-
-  /**
-   * Validate query params for listing matches
-   */
-  private validateQueryParams(query: Record<string, unknown>): MatchQueryParams {
-    const params: MatchQueryParams = {};
-    const errors: string[] = [];
-
-    if (query.courtId !== undefined) {
-      if (!isValidUuid(query.courtId)) {
-        errors.push('courtId must be a valid UUID');
-      } else {
-        params.courtId = query.courtId as string;
-      }
-    }
-
-    if (query.skillLevel !== undefined) {
-      if (!isValidSkillLevel(query.skillLevel)) {
-        errors.push(`skillLevel must be one of: ${SKILL_LEVEL_VALUES.join(', ')}`);
-      } else {
-        params.skillLevel = query.skillLevel as MatchQueryParams['skillLevel'];
-      }
-    }
-
-    if (query.playerFormat !== undefined) {
-      if (!isValidPlayerFormat(query.playerFormat)) {
-        errors.push(`playerFormat must be one of: ${PLAYER_FORMAT_VALUES.join(', ')}`);
-      } else {
-        params.playerFormat = query.playerFormat as MatchQueryParams['playerFormat'];
-      }
-    }
-
-    if (query.status !== undefined) {
-      if (!isValidMatchStatus(query.status)) {
-        errors.push(`status must be one of: ${MATCH_STATUS_VALUES.join(', ')}`);
-      } else {
-        params.status = query.status as MatchQueryParams['status'];
-      }
-    }
-
-    if (query.date !== undefined) {
-      if (!isValidDateFormat(query.date)) {
-        errors.push('date must be in YYYY-MM-DD format');
-      } else {
-        params.date = query.date as string;
-      }
-    }
-
-    if (query.dateFrom !== undefined) {
-      if (!isValidDateFormat(query.dateFrom)) {
-        errors.push('dateFrom must be in YYYY-MM-DD format');
-      } else {
-        params.dateFrom = query.dateFrom as string;
-      }
-    }
-
-    if (query.dateTo !== undefined) {
-      if (!isValidDateFormat(query.dateTo)) {
-        errors.push('dateTo must be in YYYY-MM-DD format');
-      } else {
-        params.dateTo = query.dateTo as string;
-      }
-    }
-
-    if (query.page !== undefined) {
-      const page = Number(query.page);
-      if (isNaN(page) || page < 1) {
-        errors.push('page must be a positive number');
-      } else {
-        params.page = page;
-      }
-    }
-
-    if (query.limit !== undefined) {
-      const limit = Number(query.limit);
-      if (isNaN(limit) || limit < 1 || limit > 50) {
-        errors.push('limit must be between 1 and 50');
-      } else {
-        params.limit = limit;
-      }
-    }
-
-    if (errors.length > 0) {
-      throw new BadRequestError(errors.join('; '));
-    }
-
-    return params;
-  }
-
-  /**
-   * Validate join match DTO
-   */
-  private validateJoinMatchDto(body: unknown): JoinMatchDto {
-    if (!body || typeof body !== 'object') {
-      return {};
-    }
-
-    const data = body as Record<string, unknown>;
-    const result: JoinMatchDto = {};
-
-    if (data.message !== undefined && data.message !== null) {
-      if (typeof data.message !== 'string') {
-        throw new BadRequestError('message must be a string');
-      }
-      if (data.message.length > 500) {
-        throw new BadRequestError('message must not exceed 500 characters');
-      }
-      result.message = data.message;
-    }
-
-    return result;
-  }
-
-  /**
-   * Validate respond to request DTO
-   */
-  private validateRespondDto(body: unknown): RespondToJoinRequestDto {
-    if (!body || typeof body !== 'object') {
-      throw new BadRequestError('Request body is required');
-    }
-
-    const data = body as Record<string, unknown>;
-
-    if (!data.status) {
-      throw new BadRequestError('status is required');
-    }
-
-    if (data.status !== 'ACCEPTED' && data.status !== 'REJECTED') {
-      throw new BadRequestError('status must be either ACCEPTED or REJECTED');
-    }
-
-    return {
-      status: data.status as 'ACCEPTED' | 'REJECTED',
-    };
-  }
 }
 
 export const matchController = new MatchController();

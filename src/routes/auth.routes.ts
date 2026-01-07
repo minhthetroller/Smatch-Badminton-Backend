@@ -5,6 +5,7 @@ import {
   requireAnonymousUser,
   requireRegisteredUser,
 } from '../middlewares/auth.middleware.js';
+import { uploadSingle, handleMulterError } from '../middlewares/upload.middleware.js';
 
 const router = Router();
 
@@ -51,6 +52,20 @@ router.get('/me', requireAuth, (req, res, next) => authController.getProfile(req
  * Requires: authenticated user
  */
 router.put('/me', requireAuth, (req, res, next) => authController.updateProfile(req, res, next));
+
+/**
+ * POST /auth/me/photo
+ * Upload profile photo
+ * Requires: authenticated user
+ */
+router.post('/me/photo', requireAuth, (req, res, next) => {
+  uploadSingle(req, res, (err) => {
+    if (err) {
+      return next(handleMulterError(err));
+    }
+    authController.uploadProfilePhoto(req, res, next);
+  });
+});
 
 /**
  * GET /auth/me/bookings

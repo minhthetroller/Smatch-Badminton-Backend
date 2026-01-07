@@ -35,7 +35,7 @@ export interface MatchRequestResponseNotification {
   type: 'match_request_response';
   matchId: string;
   playerId: string;
-  status: 'ACCEPTED' | 'REJECTED';
+  status: 'ACCEPTED' | 'REJECTED' | 'PENDING_PAYMENT';
   position: number | null;
   message: string;
 }

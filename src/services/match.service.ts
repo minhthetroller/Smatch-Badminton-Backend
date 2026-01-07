@@ -60,20 +60,40 @@ export class MatchService {
 
   /**
    * Get match by ID
+   * If userId is provided, includes the current user's participation status
    */
-  async getMatchById(id: string): Promise<MatchWithPlayersResponseDto> {
+  async getMatchById(id: string, userId?: string): Promise<MatchWithPlayersResponseDto> {
     const match = await matchRepository.findById(id);
     if (!match) {
       throw new NotFoundError(`Match ${id} not found`);
     }
 
-    return this.mapToMatchWithPlayersResponse(match);
+    // Get current user's player status if userId is provided
+    let currentUserStatus = null;
+    if (userId) {
+      const player = await matchRepository.findPlayer(id, userId);
+      if (player) {
+        currentUserStatus = {
+          id: player.id,
+          status: player.status,
+          position: player.position,
+          requestedAt: player.requestedAt.toISOString(),
+          respondedAt: player.respondedAt?.toISOString() ?? null,
+        };
+      }
+    }
+
+    return {
+      ...this.mapToMatchWithPlayersResponse(match),
+      currentUserStatus,
+    };
   }
 
   /**
    * List matches with filters
+   * Filters out matches the user has already joined if userId is provided
    */
-  async getAllMatches(params: MatchQueryParams): Promise<{
+  async getAllMatches(params: MatchQueryParams, userId?: string): Promise<{
     matches: MatchResponseDto[];
     total: number;
     page: number;
@@ -81,9 +101,17 @@ export class MatchService {
   }> {
     const result = await matchRepository.findAll(params);
 
+    let matches = result.matches;
+
+    // Filter out matches user has already joined
+    if (userId) {
+      const joinedMatchIds = await matchRepository.getJoinedMatchIds(userId);
+      matches = matches.filter((m) => m && !joinedMatchIds.includes(m.id));
+    }
+
     return {
-      matches: result.matches.map((m: unknown) => this.mapToMatchResponse(m)),
-      total: result.total,
+      matches: matches.map((m: unknown) => this.mapToMatchResponse(m)),
+      total: matches.length, // Update total after filtering
       page: result.page,
       limit: result.limit,
     };
@@ -172,6 +200,9 @@ export class MatchService {
     if (match.hostUserId === userId) {
       throw new BadRequestError('Host cannot join their own match');
     }
+
+    // Check for schedule conflicts
+    await this.checkScheduleConflict(userId, match.date, match.startTime, match.endTime, matchId);
 
     // Check if user already requested
     const existingPlayer = await matchRepository.findPlayer(matchId, userId);
@@ -270,6 +301,29 @@ export class MatchService {
   }
 
   /**
+   * Get join requests for a match (host only)
+   */
+  async getJoinRequests(
+    matchId: string,
+    hostUserId: string,
+    status?: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'PENDING_PAYMENT'
+  ): Promise<MatchPlayerResponseDto[]> {
+    const match = await matchRepository.findById(matchId);
+    if (!match) {
+      throw new NotFoundError(`Match ${matchId} not found`);
+    }
+
+    if (match.hostUserId !== hostUserId) {
+      throw new ForbiddenError('Only the host can view join requests');
+    }
+
+    // Get players for this match with optional status filter
+    const players = await matchRepository.getPlayersByMatchId(matchId, status);
+
+    return players.map((p) => this.mapToPlayerResponse(p));
+  }
+
+  /**
    * Respond to a join request (host only)
    */
   async respondToJoinRequest(
@@ -301,6 +355,7 @@ export class MatchService {
     }
 
     let position: number | undefined;
+    let finalStatus: 'ACCEPTED' | 'REJECTED' | 'PENDING_PAYMENT';
 
     if (status === 'ACCEPTED') {
       // Check if slots are available
@@ -309,10 +364,15 @@ export class MatchService {
         throw new BadRequestError('Match is already full');
       }
       position = await matchRepository.getNextPosition(matchId);
+
+      // For paid matches, set to PENDING_PAYMENT; for free matches, set to ACCEPTED
+      finalStatus = match.price > 0 ? 'PENDING_PAYMENT' : 'ACCEPTED';
+    } else {
+      finalStatus = status; // REJECTED
     }
 
     // Update player status
-    const updatedPlayer = await matchRepository.updatePlayerStatus(playerId, status, position);
+    const updatedPlayer = await matchRepository.updatePlayerStatus(playerId, finalStatus, position);
 
     // Remove from Redis queue
     await redisService.removeFromMatchJoinQueue(matchId, player.userId);
@@ -323,10 +383,12 @@ export class MatchService {
       type: 'match_request_response',
       matchId,
       playerId,
-      status,
+      status: finalStatus,
       position: position ?? null,
-      message: status === 'ACCEPTED' 
+      message: finalStatus === 'ACCEPTED' 
         ? `Your request to join the match has been accepted! Position: ${position}`
+        : finalStatus === 'PENDING_PAYMENT'
+        ? `Your request has been approved! Complete payment to join. Position: ${position}`
         : 'Your request to join the match has been rejected',
     };
     // Send both WebSocket and FCM notifications
@@ -336,17 +398,19 @@ export class MatchService {
         player.userId,
         matchId,
         match.title || 'Match',
-        status === 'ACCEPTED'
+        finalStatus === 'ACCEPTED' || finalStatus === 'PENDING_PAYMENT'
       ),
     ]);
 
-    // If accepted, notify all subscribers
-    if (status === 'ACCEPTED') {
+    // If accepted or pending payment, notify all subscribers
+    if (finalStatus === 'ACCEPTED' || finalStatus === 'PENDING_PAYMENT') {
       const matchNotification: MatchStatusChangeNotification = {
         type: 'match_status_change',
         matchId,
-        status: 'PLAYER_JOINED',
-        message: `${userName} joined the match`,
+        status: finalStatus === 'ACCEPTED' ? 'PLAYER_JOINED' : 'PLAYER_APPROVED',
+        message: finalStatus === 'ACCEPTED' 
+          ? `${userName} joined the match`
+          : `${userName} was approved to join (pending payment)`,
       };
       websocketService.notifyMatchSubscribers(matchId, matchNotification);
 
@@ -421,17 +485,19 @@ export class MatchService {
   /**
    * Get matches hosted by a user
    */
-  async getHostedMatches(userId: string, status?: MatchStatus): Promise<MatchWithPlayersResponseDto[]> {
-    const matches = await matchRepository.findByHostUserId(userId, status);
+  async getHostedMatches(userId: string, status?: MatchStatus, includeExpired = false): Promise<MatchWithPlayersResponseDto[]> {
+    const matches = await matchRepository.findByHostUserId(userId, status, includeExpired);
     return matches.map((m: unknown) => this.mapToMatchWithPlayersResponse(m));
   }
 
   /**
    * Get matches a user has joined
    */
-  async getJoinedMatches(userId: string): Promise<MatchWithPlayersResponseDto[]> {
-    const playerEntries = await matchRepository.findByPlayerUserId(userId);
-    return playerEntries.map((p: { match: unknown }) => this.mapToMatchWithPlayersResponse(p.match));
+  async getJoinedMatches(userId: string, includeExpired = false): Promise<MatchWithPlayersResponseDto[]> {
+    const playerEntries = await matchRepository.findByPlayerUserId(userId, undefined, includeExpired);
+    return playerEntries
+      .filter((p) => p !== undefined)
+      .map((p) => this.mapToMatchWithPlayersResponse(p.match));
   }
 
   // ==================== PRIVATE HELPERS ====================
@@ -469,6 +535,57 @@ export class MatchService {
 
     if (startMinutes >= endMinutes) {
       throw new BadRequestError('Start time must be before end time');
+    }
+  }
+
+  /**
+   * Check if two time ranges overlap
+   */
+  private doTimesOverlap(
+    start1: Date,
+    end1: Date,
+    start2: Date,
+    end2: Date
+  ): boolean {
+    // Two time ranges overlap if: start1 < end2 AND end1 > start2
+    return start1 < end2 && end1 > start2;
+  }
+
+  /**
+   * Check for schedule conflicts with user's existing matches
+   */
+  private async checkScheduleConflict(
+    userId: string,
+    matchDate: Date,
+    matchStartTime: Date,
+    matchEndTime: Date,
+    excludeMatchId?: string
+  ): Promise<void> {
+    // Get user's accepted matches on the same date
+    const existingMatches = await matchRepository.getAcceptedMatchesByUserAndDate(userId, matchDate);
+
+    // Filter out the current match if provided (for updates)
+    const conflicts = existingMatches.filter((mp) => {
+      if (excludeMatchId && mp.match.id === excludeMatchId) {
+        return false;
+      }
+
+      // Check if times overlap
+      return this.doTimesOverlap(
+        matchStartTime,
+        matchEndTime,
+        mp.match.startTime,
+        mp.match.endTime
+      );
+    });
+
+    if (conflicts.length > 0) {
+      const conflictTitles = conflicts
+        .map((mp) => mp.match.title || 'Untitled match')
+        .join(', ');
+      throw new ConflictError(
+        `You have scheduling conflicts with: ${conflictTitles}. Cannot join matches with overlapping times.`
+      );
     }
   }
 

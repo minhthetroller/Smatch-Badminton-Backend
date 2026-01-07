@@ -6,7 +6,8 @@
 import { Router } from 'express';
 import { matchController } from '../controllers/match.controller.js';
 import { paymentController } from '../controllers/payment.controller.js';
-import { requireAuth, requireRegisteredUser } from '../middlewares/auth.middleware.js';
+import { requireAuth, requireRegisteredUser, optionalAuth } from '../middlewares/auth.middleware.js';
+import { uploadMultiple, handleMulterError } from '../middlewares/upload.middleware.js';
 
 const router = Router();
 
@@ -33,17 +34,25 @@ router.get('/joined', requireAuth, requireRegisteredUser, matchController.getJoi
 
 /**
  * @route GET /api/matches/:id
- * @desc Get match by ID with players
- * @access Public
+ * @desc Get match by ID with players (includes currentUserStatus if authenticated)
+ * @access Public (optional auth for user status)
  */
-router.get('/:id', matchController.getById.bind(matchController));
+router.get('/:id', optionalAuth, matchController.getById.bind(matchController));
 
 /**
  * @route POST /api/matches
- * @desc Create a new exchange match
+ * @desc Create a new exchange match (supports multipart/form-data with up to 3 images)
  * @access Private (Registered users)
  */
-router.post('/', requireAuth, requireRegisteredUser, matchController.create.bind(matchController));
+router.post('/', requireAuth, requireRegisteredUser, (req, res, next) => {
+  const upload = uploadMultiple(3);
+  upload(req, res, (err) => {
+    if (err) {
+      return next(handleMulterError(err));
+    }
+    matchController.create.bind(matchController)(req, res, next);
+  });
+});
 
 /**
  * @route PUT /api/matches/:id
@@ -72,6 +81,13 @@ router.post('/:id/join', requireAuth, requireRegisteredUser, matchController.joi
  * @access Private (Registered users)
  */
 router.delete('/:id/leave', requireAuth, requireRegisteredUser, matchController.leave.bind(matchController));
+
+/**
+ * @route GET /api/matches/:id/requests
+ * @desc Get all join requests for a match (host only)
+ * @access Private (Host only)
+ */
+router.get('/:id/requests', requireAuth, requireRegisteredUser, matchController.getJoinRequests.bind(matchController));
 
 /**
  * @route POST /api/matches/:id/requests/:playerId/respond

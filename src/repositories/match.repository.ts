@@ -96,54 +96,104 @@ export class MatchRepository {
       date,
       dateFrom,
       dateTo,
+      includeExpired = false,
       page = 1,
       limit = 10,
     } = params;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.MatchWhereInput = {};
+    // Build WHERE conditions
+    const conditions: string[] = ['1=1'];
+    const values: any[] = [];
+    let paramIndex = 1;
 
-    if (courtId) where.courtId = courtId;
-    if (skillLevel) where.skillLevel = skillLevel;
-    if (playerFormat) where.playerFormat = playerFormat;
-    if (status) where.status = status;
+    if (courtId) {
+      conditions.push(`court_id = $${paramIndex++}::uuid`);
+      values.push(courtId);
+    }
+    if (skillLevel) {
+      conditions.push(`skill_level = $${paramIndex++}`);
+      values.push(skillLevel);
+    }
+    if (playerFormat) {
+      conditions.push(`player_format = $${paramIndex++}`);
+      values.push(playerFormat);
+    }
+    if (status) {
+      conditions.push(`status = $${paramIndex++}::\"MatchStatus\"`);
+      values.push(status);
+    }
 
     // Date filtering
     if (date) {
-      where.date = new Date(date);
+      conditions.push(`date = $${paramIndex++}::date`);
+      values.push(date);
     } else if (dateFrom || dateTo) {
-      where.date = {};
-      if (dateFrom) where.date.gte = new Date(dateFrom);
-      if (dateTo) where.date.lte = new Date(dateTo);
+      if (dateFrom) {
+        conditions.push(`date >= $${paramIndex++}::date`);
+        values.push(dateFrom);
+      }
+      if (dateTo) {
+        conditions.push(`date <= $${paramIndex++}::date`);
+        values.push(dateTo);
+      }
     }
 
-    const [matches, total] = await Promise.all([
-      prisma.match.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
-        include: {
-          court: true,
-          host: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              username: true,
-              photoUrl: true,
-            },
-          },
-          players: {
-            where: { status: 'ACCEPTED' },
-            select: { id: true },
-          },
-        },
-      }),
-      prisma.match.count({ where }),
+    // Filter out expired matches by default (leverages idx_matches_datetime_end index)
+    if (!includeExpired) {
+      conditions.push(`(date + end_time) > NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'`);
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    // Execute count and data queries
+    const countQuery = `SELECT COUNT(*) as count FROM matches WHERE ${whereClause}`;
+    const dataQuery = `
+      SELECT 
+        m.*,
+        (SELECT COUNT(*) FROM match_players WHERE match_id = m.id AND status = 'ACCEPTED') as accepted_count
+      FROM matches m
+      WHERE ${whereClause}
+      ORDER BY m.date ASC, m.start_time ASC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex}
+    `;
+
+    values.push(limit, skip);
+
+    const [countResult, matchRows] = await Promise.all([
+      prisma.$queryRawUnsafe(countQuery, ...values.slice(0, -2)) as Promise<any[]>,
+      prisma.$queryRawUnsafe(dataQuery, ...values) as Promise<any[]>,
     ]);
 
-    return { matches, total, page, limit };
+    const total = parseInt(countResult[0]?.count || '0', 10);
+
+    // Fetch full match data with relations using Prisma
+    const matchIds = matchRows.map((row: any) => row.id);
+    const matches = await prisma.match.findMany({
+      where: { id: { in: matchIds } },
+      include: {
+        court: true,
+        host: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            username: true,
+            photoUrl: true,
+          },
+        },
+        players: {
+          where: { status: 'ACCEPTED' },
+          select: { id: true },
+        },
+      },
+    });
+
+    // Maintain order from raw query
+    const matchMap = new Map(matches.map(m => [m.id, m]));
+    const orderedMatches = matchIds.map(id => matchMap.get(id)).filter(Boolean);
+
+    return { matches: orderedMatches, total, page, limit };
   }
 
   /**
@@ -371,13 +421,37 @@ export class MatchRepository {
   /**
    * Find matches hosted by a user
    */
-  async findByHostUserId(hostUserId: string, status?: MatchStatus) {
-    const where: Prisma.MatchWhereInput = { hostUserId };
-    if (status) where.status = status;
+  async findByHostUserId(hostUserId: string, status?: MatchStatus, includeExpired = false) {
+    const conditions: string[] = ['host_user_id = $1::uuid'];
+    const values: any[] = [hostUserId];
+    let paramIndex = 2;
 
-    return prisma.match.findMany({
-      where,
-      orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
+    if (status) {
+      conditions.push(`status = $${paramIndex++}::"MatchStatus"`);
+      values.push(status);
+    }
+
+    // Filter out expired matches by default
+    if (!includeExpired) {
+      conditions.push(`(date + end_time) > NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'`);
+    }
+
+    const whereClause = conditions.join(' AND ');
+    const query = `
+      SELECT id FROM matches
+      WHERE ${whereClause}
+      ORDER BY date ASC, start_time ASC
+    `;
+
+    const matchRows: any[] = await prisma.$queryRawUnsafe(query, ...values);
+    const matchIds = matchRows.map((row: any) => row.id);
+
+    if (matchIds.length === 0) {
+      return [];
+    }
+
+    const matches = await prisma.match.findMany({
+      where: { id: { in: matchIds } },
       include: {
         court: true,
         host: {
@@ -404,17 +478,47 @@ export class MatchRepository {
         },
       },
     });
+
+    // Maintain order from raw query
+    const matchMap = new Map(matches.map(m => [m.id, m]));
+    return matchIds.map(id => matchMap.get(id)).filter(Boolean);
   }
 
   /**
    * Find matches a user has joined
    */
-  async findByPlayerUserId(userId: string, status?: MatchPlayerStatus) {
-    const where: Prisma.MatchPlayerWhereInput = { userId };
-    if (status) where.status = status;
+  async findByPlayerUserId(userId: string, status?: MatchPlayerStatus, includeExpired = false) {
+    const conditions: string[] = ['mp.user_id = $1::uuid'];
+    const values: any[] = [userId];
+    let paramIndex = 2;
 
-    return prisma.matchPlayer.findMany({
-      where,
+    if (status) {
+      conditions.push(`mp.status = $${paramIndex++}::"MatchPlayerStatus"`);
+      values.push(status);
+    }
+
+    // Filter out expired matches by default
+    if (!includeExpired) {
+      conditions.push(`(m.date + m.end_time) > NOW() AT TIME ZONE 'Asia/Ho_Chi_Minh'`);
+    }
+
+    const whereClause = conditions.join(' AND ');
+    const query = `
+      SELECT mp.id FROM match_players mp
+      JOIN matches m ON mp.match_id = m.id
+      WHERE ${whereClause}
+      ORDER BY mp.requested_at DESC
+    `;
+
+    const playerRows: any[] = await prisma.$queryRawUnsafe(query, ...values);
+    const playerIds = playerRows.map((row: any) => row.id);
+
+    if (playerIds.length === 0) {
+      return [];
+    }
+
+    const players = await prisma.matchPlayer.findMany({
+      where: { id: { in: playerIds } },
       include: {
         match: {
           include: {
@@ -431,7 +535,55 @@ export class MatchRepository {
           },
         },
       },
-      orderBy: { requestedAt: 'desc' },
+    });
+
+    // Maintain order from raw query
+    const playerMap = new Map(players.map(p => [p.id, p]));
+    return playerIds.map(id => playerMap.get(id)).filter(Boolean);
+  }
+
+  /**
+   * Get match IDs that a user has joined (accepted status only)
+   */
+  async getJoinedMatchIds(userId: string): Promise<string[]> {
+    const players = await prisma.matchPlayer.findMany({
+      where: {
+        userId,
+        status: 'ACCEPTED',
+      },
+      select: {
+        matchId: true,
+      },
+    });
+    return players.map((p) => p.matchId);
+  }
+
+  /**
+   * Get user's accepted matches on a specific date
+   */
+  async getAcceptedMatchesByUserAndDate(userId: string, date: Date) {
+    return prisma.matchPlayer.findMany({
+      where: {
+        userId,
+        status: 'ACCEPTED',
+        match: {
+          date: {
+            gte: new Date(date.setHours(0, 0, 0, 0)),
+            lt: new Date(date.setHours(23, 59, 59, 999)),
+          },
+        },
+      },
+      include: {
+        match: {
+          select: {
+            id: true,
+            date: true,
+            startTime: true,
+            endTime: true,
+            title: true,
+          },
+        },
+      },
     });
   }
 

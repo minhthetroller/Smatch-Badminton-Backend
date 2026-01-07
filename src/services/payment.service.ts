@@ -959,9 +959,15 @@ export class PaymentService {
       }
     }
 
-    // For private matches, require host approval first
+    // For private matches, require host approval first (status should be PENDING_PAYMENT after approval)
     if (match.isPrivate && (!matchPlayer || matchPlayer.status !== 'PENDING_PAYMENT')) {
       throw new BadRequestError('This is a private match. Request to join first and wait for host approval.');
+    }
+
+    // For public paid matches, ensure player has been approved (PENDING_PAYMENT status)
+    if (!match.isPrivate && match.price > 0 && matchPlayer && matchPlayer.status === 'ACCEPTED') {
+      // Legacy support: if somehow status is ACCEPTED for a paid match, update to PENDING_PAYMENT
+      matchPlayer = await matchRepository.updatePlayerStatus(matchPlayer.id, 'PENDING_PAYMENT');
     }
 
     // Check if slots are available

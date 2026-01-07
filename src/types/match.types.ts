@@ -244,6 +244,7 @@ export interface MatchQueryParams {
   date?: string;              // Filter by specific date
   dateFrom?: string;          // Filter from date
   dateTo?: string;            // Filter to date
+  includeExpired?: boolean;   // Include expired/past matches (default: false)
   page?: number;
   limit?: number;
 }
@@ -297,4 +298,17 @@ export interface MatchPlayerResponseDto {
  */
 export interface MatchWithPlayersResponseDto extends MatchResponseDto {
   players: MatchPlayerResponseDto[];
+  /** Current authenticated user's participation status in this match (null if not a participant) */
+  currentUserStatus?: {
+    /** MatchPlayer record ID - use this for responding to requests */
+    id: string;
+    /** Player status: PENDING, ACCEPTED, PENDING_PAYMENT, REJECTED, LEFT, EXPIRED */
+    status: MatchPlayerStatus;
+    /** Position in the match (if assigned) */
+    position: number | null;
+    /** When the request was made */
+    requestedAt: string;
+    /** When the host responded (if applicable) */
+    respondedAt: string | null;
+  } | null;
 }
