@@ -168,6 +168,12 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate
 
+      - name: Verify version before build
+        run: |
+          echo "=== Building version ==="
+          cat package.json | grep '"version"'
+          echo "Commit: $(git rev-parse HEAD)"
+
       - name: Build
         run: npm run build
 
@@ -175,7 +181,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: dist/
+          path: |
+            dist/
+            package.json
+            package-lock.json
+            prisma/
           retention-days: 7
 
   deploy:
@@ -188,6 +198,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify checkout
+        run: |
+          echo "=== Git Info ==="
+          echo "Commit SHA: $(git rev-parse HEAD)"
+          echo "Branch: $(git branch --show-current || echo 'detached')"
+          echo ""
+          echo "=== Package.json Version ==="
+          cat package.json | grep '"version"'
 
       - name: Get commit info
         id: commit
@@ -200,15 +221,24 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: dist
-          path: dist/
+          path: ./
 
       - name: Verify build artifacts
         run: |
           echo "=== Build artifacts downloaded ==="
           ls -lah dist/
           echo ""
-          echo "=== Package version ==="
+          echo "=== Package version from artifact ==="
           cat package.json | grep '"version"'
+          echo ""
+          echo "=== Verifying this is the correct version ==="
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Detected version: $VERSION"
+          if [ "$VERSION" != "2.4.1" ]; then
+            echo "⚠️  WARNING: Version mismatch! Expected 2.4.1 but got $VERSION"
+          else
+            echo "✅ Version matches expected: $VERSION"
+          fi
 
       - name: Setup SSH
         run: |
