@@ -5,6 +5,7 @@ import {
   requireAnonymousUser,
   requireRegisteredUser,
 } from '../middlewares/auth.middleware.js';
+import { uploadSingle, handleMulterError } from '../middlewares/upload.middleware.js';
 
 const router = Router();
 
@@ -53,6 +54,20 @@ router.get('/me', requireAuth, (req, res, next) => authController.getProfile(req
 router.put('/me', requireAuth, (req, res, next) => authController.updateProfile(req, res, next));
 
 /**
+ * POST /auth/me/photo
+ * Upload profile photo
+ * Requires: authenticated user
+ */
+router.post('/me/photo', requireAuth, (req, res, next) => {
+  uploadSingle(req, res, (err) => {
+    if (err) {
+      return next(handleMulterError(err));
+    }
+    authController.uploadProfilePhoto(req, res, next);
+  });
+});
+
+/**
  * GET /auth/me/bookings
  * Get user's booking history
  * Requires: authenticated user (anonymous or registered)
@@ -90,6 +105,26 @@ router.post('/convert', requireAnonymousUser, (req, res, next) =>
  */
 router.delete('/account', requireRegisteredUser, (req, res, next) =>
   authController.deleteAccount(req, res, next)
+);
+
+// ==================== FCM Token Routes ====================
+
+/**
+ * POST /auth/fcm-token
+ * Register FCM token for push notifications
+ * Requires: authenticated user
+ */
+router.post('/fcm-token', requireAuth, (req, res, next) =>
+  authController.registerFcmToken(req, res, next)
+);
+
+/**
+ * DELETE /auth/fcm-token
+ * Unregister FCM token
+ * Requires: authenticated user
+ */
+router.delete('/fcm-token', requireAuth, (req, res, next) =>
+  authController.unregisterFcmToken(req, res, next)
 );
 
 export { router as authRoutes };

@@ -46,6 +46,7 @@ model Court {
   /// RELATIONS
   subCourts    SubCourt[]    @relation("CourtSubCourts")
   pricingRules PricingRule[] @relation("CourtPricingRules")
+  matches      Match[]       @relation("CourtMatches")
 
   @@index([addressDistrict], map: "idx_courts_district")
   @@index([details(ops: JsonbOps)], map: "idx_courts_details", type: Gin)
@@ -142,26 +143,37 @@ model Booking {
   @@map("bookings")
 }
 
+/// PaymentType - Type of payment
+enum PaymentType {
+  BOOKING      // Court booking payment
+  MATCH_JOIN   // Match join fee payment
+}
+
 /// Payment - Track ZaloPay payment transactions
 model Payment {
-  id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  bookingId    String   @map("booking_id") @db.Uuid
-  appTransId   String   @unique @map("app_trans_id") @db.VarChar(40) // ZaloPay transaction ID (yymmdd_xxx)
-  zpTransId    String?  @map("zp_trans_id") @db.VarChar(20) // ZaloPay's transaction ID (from callback)
-  zpTransToken String?  @map("zp_trans_token") @db.VarChar(256) // Token for ZaloPay mobile SDK
-  amount       Int      // Amount in VND
-  status       String   @default("pending") @db.VarChar(20) // pending, success, failed, expired
-  orderUrl     String?  @map("order_url") @db.Text // ZaloPay order URL for QR code
-  callbackData Json?    @map("callback_data") @db.JsonB // Store raw callback for debugging
+  id           String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  bookingId    String?     @map("booking_id") @db.Uuid // Optional - for booking payments
+  matchPlayerId String?    @map("match_player_id") @db.Uuid // Optional - for match join payments
+  paymentType  PaymentType @default(BOOKING) @map("payment_type") // Type of payment
+  appTransId   String      @unique @map("app_trans_id") @db.VarChar(40) // ZaloPay transaction ID (yymmdd_xxx)
+  zpTransId    String?     @map("zp_trans_id") @db.VarChar(20) // ZaloPay's transaction ID (from callback)
+  zpTransToken String?     @map("zp_trans_token") @db.VarChar(256) // Token for ZaloPay mobile SDK
+  amount       Int         // Amount in VND
+  status       String      @default("pending") @db.VarChar(20) // pending, success, failed, expired
+  orderUrl     String?     @map("order_url") @db.Text // ZaloPay order URL for QR code
+  callbackData Json?       @map("callback_data") @db.JsonB // Store raw callback for debugging
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   /// RELATIONS
-  booking Booking @relation("BookingPayments", fields: [bookingId], references: [id], onDelete: Cascade)
+  booking     Booking?     @relation("BookingPayments", fields: [bookingId], references: [id], onDelete: Cascade)
+  matchPlayer MatchPlayer? @relation("MatchPlayerPayments", fields: [matchPlayerId], references: [id], onDelete: Cascade)
 
   @@index([bookingId], map: "idx_payments_booking_id")
+  @@index([matchPlayerId], map: "idx_payments_match_player_id")
   @@index([status], map: "idx_payments_status")
+  @@index([paymentType], map: "idx_payments_type")
   @@map("payments")
 }
 
@@ -206,11 +218,154 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
+  /// PUSH NOTIFICATIONS
+  fcmTokens String[] @default([]) @map("fcm_tokens") @db.Text
+
   /// RELATIONS
-  bookings Booking[] @relation("UserBookings")
+  bookings      Booking[]      @relation("UserBookings")
+  hostedMatches Match[]        @relation("HostedMatches")
+  matchPlayers  MatchPlayer[]  @relation("UserMatchPlayers")
 
   @@index([firebaseUid], map: "idx_users_firebase_uid")
   @@index([email], map: "idx_users_email")
   @@index([username], map: "idx_users_username")
   @@map("users")
+}
+
+// ==================== MATCH (Exchange) MODELS ====================
+
+/// SkillLevel - Player skill levels for matching
+enum SkillLevel {
+  TBY        // Tập bóng yếu (Beginner weak)
+  Y          // Yếu (Weak)
+  Y_PLUS     // Yếu+ (Weak+)
+  Y_PLUS_PLUS // Yếu++ (Weak++)
+  TBK        // Trung bình khá (Average-good)
+  TB         // Trung bình (Average)
+  TB_PLUS    // Trung bình+ (Average+)
+  TB_PLUS_PLUS // Trung bình++ (Average++)
+  K          // Khá (Good)
+  K_PLUS     // Khá+ (Good+)
+  GIOI       // Giỏi (Excellent)
+}
+
+/// ShuttleType - Shuttlecock brands/types
+enum ShuttleType {
+  TC77
+  BASAO
+  YONEX_AS30
+  YONEX_AS40
+  YONEX_AS50
+  VICTOR_MASTER_1
+  VICTOR_CHAMPION_1
+  RSL_CLASSIC
+  LINDAN_40
+  LINDAN_50
+  OTHER
+}
+
+/// PlayerFormat - Match format for players
+enum PlayerFormat {
+  SINGLE_MALE       // Nam đơn
+  SINGLE_FEMALE     // Nữ đơn
+  DOUBLE_MALE       // Nam đôi
+  DOUBLE_FEMALE     // Nữ đôi
+  MIXED_DOUBLE      // Đôi nam nữ
+  ANY               // Linh hoạt
+}
+
+/// MatchStatus - Status of a match
+enum MatchStatus {
+  OPEN       // Looking for players
+  FULL       // All slots filled
+  IN_PROGRESS // Match is happening
+  COMPLETED  // Match finished
+  CANCELLED  // Match cancelled
+}
+
+/// MatchPlayerStatus - Status of a player in a match
+enum MatchPlayerStatus {
+  PENDING         // Waiting for host approval (private match)
+  PENDING_PAYMENT // Waiting for payment (after approval or for public match with fee)
+  ACCEPTED        // Approved and paid (or free match)
+  REJECTED        // Rejected by host
+  LEFT            // Player left the match
+  EXPIRED         // Payment expired
+}
+
+/// Match - Exchange match for finding players
+model Match {
+  id          String      @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  
+  /// RELATIONS
+  courtId     String      @map("court_id") @db.Uuid
+  hostUserId  String      @map("host_user_id") @db.Uuid
+  
+  /// BASIC INFO
+  title       String?     @db.VarChar(255)
+  description String?     @db.Text
+  images      String[]    @default([]) @db.Text // S3 URLs
+  
+  /// MATCH DETAILS
+  skillLevel  SkillLevel  @map("skill_level")
+  shuttleType ShuttleType @map("shuttle_type")
+  playerFormat PlayerFormat @map("player_format")
+  
+  /// SCHEDULE
+  date        DateTime    @db.Date
+  startTime   DateTime    @map("start_time") @db.Time()
+  endTime     DateTime    @map("end_time") @db.Time()
+  
+  /// SETTINGS
+  isPrivate   Boolean     @default(false) @map("is_private") // Requires approval to join
+  price       Int         @default(0) // Price per player in VND
+  slotsNeeded Int         @default(1) @map("slots_needed") // Number of players needed
+  
+  /// STATUS
+  status      MatchStatus @default(OPEN)
+  
+  /// METADATA
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  
+  /// RELATIONS
+  court       Court       @relation("CourtMatches", fields: [courtId], references: [id], onDelete: Cascade)
+  host        User        @relation("HostedMatches", fields: [hostUserId], references: [id], onDelete: Cascade)
+  players     MatchPlayer[] @relation("MatchPlayers")
+  
+  @@index([courtId], map: "idx_matches_court_id")
+  @@index([hostUserId], map: "idx_matches_host_user_id")
+  @@index([date, status], map: "idx_matches_date_status")
+  @@index([skillLevel, status], map: "idx_matches_skill_status")
+  @@map("matches")
+}
+
+/// MatchPlayer - Players joining a match
+model MatchPlayer {
+  id          String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  
+  /// RELATIONS
+  matchId     String            @map("match_id") @db.Uuid
+  userId      String            @map("user_id") @db.Uuid
+  
+  /// STATUS
+  status      MatchPlayerStatus @default(PENDING)
+  message     String?           @db.Text // Optional message when requesting to join
+  
+  /// POSITION (for ordering accepted players)
+  position    Int?              // 1, 2, 3, 4 for doubles etc.
+  
+  /// TIMESTAMPS
+  requestedAt DateTime          @default(now()) @map("requested_at") @db.Timestamptz
+  respondedAt DateTime?         @map("responded_at") @db.Timestamptz
+  
+  /// RELATIONS
+  match       Match             @relation("MatchPlayers", fields: [matchId], references: [id], onDelete: Cascade)
+  user        User              @relation("UserMatchPlayers", fields: [userId], references: [id], onDelete: Cascade)
+  payments    Payment[]         @relation("MatchPlayerPayments")
+  
+  @@unique([matchId, userId], map: "idx_match_players_unique")
+  @@index([matchId, status], map: "idx_match_players_match_status")
+  @@index([userId], map: "idx_match_players_user_id")
+  @@map("match_players")
 }

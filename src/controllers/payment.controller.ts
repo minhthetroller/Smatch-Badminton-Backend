@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import type { AuthRequest } from '../middlewares/auth.middleware.js';
 import { paymentService } from '../services/index.js';
 import { sendSuccess } from '../utils/response.js';
 import type { CreatePaymentDto, ZaloPayCallbackRequest } from '../types/index.js';
@@ -13,6 +14,38 @@ export class PaymentController {
       const data: CreatePaymentDto = req.body;
       const result = await paymentService.createPayment(data);
       sendSuccess(res, result, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/matches/:id/payment
+   * Create a payment for joining a match (100% upfront fee)
+   */
+  async createMatchJoinPayment(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id: matchId } = req.params;
+      const userId = req.user?.id;
+      if (!userId) {
+        throw new Error('User ID is required');
+      }
+      const result = await paymentService.createMatchJoinPayment(matchId!, userId);
+      sendSuccess(res, result, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/matches/:id/payment/:paymentId/status
+   * Query match join payment status
+   */
+  async queryMatchPaymentStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { paymentId } = req.params;
+      const payment = await paymentService.queryMatchPaymentStatus(paymentId!);
+      sendSuccess(res, payment);
     } catch (error) {
       next(error);
     }

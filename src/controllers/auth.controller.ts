@@ -1,5 +1,8 @@
 import type { Response, NextFunction } from 'express';
 import { userService } from '../services/index.js';
+import { userRepository } from '../repositories/user.repository.js';
+import { s3Service, imageService } from '../services/index.js';
+import { config } from '../config/index.js';
 import { sendSuccess } from '../utils/response.js';
 import { AppError } from '../utils/errors.js';
 import type { AuthRequest } from '../middlewares/auth.middleware.js';
@@ -12,6 +15,7 @@ import type {
   LookupUsernameDto,
   mapUserToDto,
 } from '../types/auth.types.js';
+import type { RegisterFcmTokenDto } from '../types/notification.types.js';
 import { mapUserToDto as mapUser } from '../types/auth.types.js';
 
 export class AuthController {
@@ -122,6 +126,52 @@ export class AuthController {
       const user = await userService.updateProfile(req.user.id, data);
 
       sendSuccess(res, { user: mapUser(user) });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /auth/me/photo
+   * Upload profile photo
+   * Requires: authenticated user
+   */
+  async uploadProfilePhoto(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new AppError('Authentication required', 401, 'UNAUTHENTICATED');
+      }
+
+      if (!req.file) {
+        throw new AppError('No image file provided', 400, 'NO_FILE_PROVIDED');
+      }
+
+      // Delete old photo if exists
+      if (req.user.photoUrl) {
+        try {
+          await s3Service.deleteFileByUrl(req.user.photoUrl, config.aws.s3.bucketProfile);
+        } catch (error) {
+          console.warn('⚠️  Failed to delete old profile photo:', error);
+        }
+      }
+
+      // Compress and resize image
+      const compressedBuffer = await imageService.compressProfilePhoto(req.file.buffer);
+
+      // Upload to S3
+      const timestamp = Date.now();
+      const key = `users/${req.user.id}/profile/${timestamp}.jpg`;
+      const photoUrl = await s3Service.uploadFile(
+        compressedBuffer,
+        key,
+        'image/jpeg',
+        config.aws.s3.bucketProfile
+      );
+
+      // Update user profile
+      const user = await userService.updateProfile(req.user.id, { photoUrl });
+
+      sendSuccess(res, { user: mapUser(user), photoUrl }, 201);
     } catch (error) {
       next(error);
     }
@@ -258,6 +308,62 @@ export class AuthController {
       sendSuccess(res, {
         linkedCount,
         message: `${linkedCount} booking(s) linked to your account`,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // ==================== FCM TOKEN ENDPOINTS ====================
+
+  /**
+   * POST /auth/fcm-token
+   * Register FCM token for push notifications
+   * Requires: authenticated user
+   */
+  async registerFcmToken(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new AppError('Authentication required', 401, 'UNAUTHENTICATED');
+      }
+
+      const { token }: RegisterFcmTokenDto = req.body;
+
+      if (!token || typeof token !== 'string' || token.trim().length === 0) {
+        throw new AppError('Valid FCM token is required', 400, 'INVALID_FCM_TOKEN');
+      }
+
+      await userRepository.addFcmToken(req.user.id, token.trim());
+
+      sendSuccess(res, {
+        message: 'FCM token registered successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * DELETE /auth/fcm-token
+   * Unregister FCM token (on logout or when user disables notifications)
+   * Requires: authenticated user
+   */
+  async unregisterFcmToken(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new AppError('Authentication required', 401, 'UNAUTHENTICATED');
+      }
+
+      const { token }: RegisterFcmTokenDto = req.body;
+
+      if (!token || typeof token !== 'string' || token.trim().length === 0) {
+        throw new AppError('Valid FCM token is required', 400, 'INVALID_FCM_TOKEN');
+      }
+
+      await userRepository.removeFcmToken(req.user.id, token.trim());
+
+      sendSuccess(res, {
+        message: 'FCM token unregistered successfully',
       });
     } catch (error) {
       next(error);

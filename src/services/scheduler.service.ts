@@ -1,5 +1,6 @@
 import { prisma } from '../config/database.js';
 import { config } from '../config/index.js';
+import { websocketService } from './websocket.service.js';
 
 /**
  * Scheduler Service
@@ -8,8 +9,10 @@ import { config } from '../config/index.js';
 export class SchedulerService {
   private completionInterval: NodeJS.Timeout | null = null;
   private expiredPendingInterval: NodeJS.Timeout | null = null;
+  private expiredMatchPaymentsInterval: NodeJS.Timeout | null = null;
   private readonly COMPLETION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly EXPIRED_PENDING_CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
+  private readonly EXPIRED_MATCH_PAYMENTS_CHECK_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 
   /**
    * Start all scheduled tasks
@@ -18,6 +21,7 @@ export class SchedulerService {
     console.log('📅 Starting scheduler service...');
     this.startBookingCompletionChecker();
     this.startExpiredPendingChecker();
+    this.startExpiredMatchPaymentsChecker();
   }
 
   /**
@@ -32,6 +36,10 @@ export class SchedulerService {
     if (this.expiredPendingInterval) {
       clearInterval(this.expiredPendingInterval);
       this.expiredPendingInterval = null;
+    }
+    if (this.expiredMatchPaymentsInterval) {
+      clearInterval(this.expiredMatchPaymentsInterval);
+      this.expiredMatchPaymentsInterval = null;
     }
   }
 
@@ -150,6 +158,101 @@ export class SchedulerService {
       return count;
     } catch (error) {
       console.error('Error marking expired pending bookings:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Start the expired match payments checker
+   * Runs every 2 minutes to expire pending match join payments
+   */
+  private startExpiredMatchPaymentsChecker(): void {
+    // Run immediately on startup
+    this.markExpiredMatchPayments().catch(console.error);
+
+    // Then run every 2 minutes
+    this.expiredMatchPaymentsInterval = setInterval(() => {
+      this.markExpiredMatchPayments().catch(console.error);
+    }, this.EXPIRED_MATCH_PAYMENTS_CHECK_INTERVAL_MS);
+
+    console.log(`✅ Expired match payments checker started (runs every ${this.EXPIRED_MATCH_PAYMENTS_CHECK_INTERVAL_MS / 1000 / 60} minutes)`);
+  }
+
+  /**
+   * Mark expired pending match join payments as failed
+   * This handles match players who started payment but never completed
+   * 
+   * Logic:
+   * - Only PENDING_PAYMENT match players with pending payments older than timeout
+   * - Uses the slot lock TTL from config (default 10 minutes) + 5 minutes buffer
+   * - Payment status: 'expired'
+   * - MatchPlayer status: 'EXPIRED'
+   */
+  async markExpiredMatchPayments(): Promise<number> {
+    try {
+      // Use slot lock TTL + 5 minutes buffer
+      const timeoutSeconds = config.payment.slotLockTtlSeconds + 300; // 5 min buffer
+      const cutoffTime = new Date(Date.now() - timeoutSeconds * 1000);
+      
+      // Find expired pending match payments
+      const expiredPayments = await prisma.payment.findMany({
+        where: {
+          paymentType: 'MATCH_JOIN',
+          status: 'pending',
+          createdAt: {
+            lt: cutoffTime,
+          },
+        },
+        include: {
+          matchPlayer: {
+            include: {
+              match: true,
+            },
+          },
+        },
+      });
+
+      if (expiredPayments.length === 0) {
+        return 0;
+      }
+
+      // Update payments and match players in a transaction
+      await prisma.$transaction(async (tx) => {
+        for (const payment of expiredPayments) {
+          // Mark payment as expired
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: 'expired',
+              updatedAt: new Date(),
+            },
+          });
+
+          // Mark match player as expired if exists
+          if (payment.matchPlayerId) {
+            await tx.matchPlayer.update({
+              where: { id: payment.matchPlayerId },
+              data: {
+                status: 'EXPIRED',
+              },
+            });
+
+            // Notify via WebSocket
+            websocketService.notifyPaymentStatus({
+              type: 'payment_status',
+              paymentId: payment.id,
+              status: 'expired',
+              bookingId: payment.matchPlayerId,
+              message: 'Payment expired. Please try again if you still want to join.',
+            });
+          }
+        }
+      });
+
+      console.log(`⏰ Marked ${expiredPayments.length} expired match payment(s) as expired`);
+      return expiredPayments.length;
+    } catch (error) {
+      console.error('Error marking expired match payments:', error);
       return 0;
     }
   }

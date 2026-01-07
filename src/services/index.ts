@@ -9,4 +9,7 @@ export * from './search.service.js';
 export * from './firebase.service.js';
 export * from './user.service.js';
 export * from './scheduler.service.js';
-
+export * from './match.service.js';
+export * from './notification.service.js';
+export * from './s3.service.js';
+export * from './image.service.js';

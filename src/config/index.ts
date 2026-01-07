@@ -30,6 +30,17 @@ export const config = {
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL || '',
     privateKey: process.env.FIREBASE_PRIVATE_KEY || '',
   },
+  aws: {
+    region: process.env.AWS_REGION || 'us-east-1',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || 'test',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || 'test',
+    endpoint: process.env.AWS_ENDPOINT, // Optional: for LocalStack
+    s3: {
+      bucketProfile: process.env.AWS_S3_BUCKET_PROFILE || 'smatch-profiles',
+      bucketMatches: process.env.AWS_S3_BUCKET_MATCHES || 'smatch-matches',
+    },
+  },
 } as const;
 
 export { initializeFirebase, getFirebaseAuth, isFirebaseConfigured } from './firebase.js';
+export { initializeS3Client, getS3Client, isS3Configured } from './s3.js';

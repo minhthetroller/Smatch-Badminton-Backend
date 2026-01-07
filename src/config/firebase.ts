@@ -24,7 +24,7 @@ export function initializeFirebase(): App {
   }
 
   // Try loading from JSON file first
-  const serviceAccountPath = path.join(process.cwd(), 'smatch-badminton-firebase-adminsdk-fbsvc-b4ea537d9e.json');
+  const serviceAccountPath = path.join(process.cwd(), 'smatch-badminton-firebase-adminsdk-fbsvc-fb65abab30.json');
   
   if (fs.existsSync(serviceAccountPath)) {
     try {
@@ -45,6 +45,11 @@ export function initializeFirebase(): App {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
   if (!projectId || !clientEmail || !privateKey) {
+    // In test environment, throw a specific error that will be caught by NotificationService
+    if (process.env.NODE_ENV === 'test') {
+      console.warn('⚠️  Firebase Admin SDK not configured in test environment. Firebase features will be disabled.');
+      throw new Error('Firebase not configured in test environment');
+    }
     throw new Error(
       'Firebase configuration missing. Please set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY environment variables, or provide the service account JSON file.'
     );

@@ -39,5 +39,4 @@ junit.xml
 *.junit.xml
 
 # Firebase Service Account
-smatch-badminton-firebase-adminsdk-fbsvc-b4ea537d9e.json
-
+smatch-badminton-firebase-adminsdk-fbsvc-*.json

@@ -297,6 +297,94 @@ export class UserRepository {
       where: filters,
     });
   }
+
+  // ==================== FCM TOKEN METHODS ====================
+
+  /**
+   * Add FCM token to user (avoid duplicates)
+   */
+  async addFcmToken(userId: string, token: string): Promise<User> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new Error(`User ${userId} not found`);
+    }
+
+    // Avoid adding duplicate tokens
+    if (user.fcmTokens.includes(token)) {
+      return user;
+    }
+
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        fcmTokens: {
+          push: token,
+        },
+      },
+    });
+  }
+
+  /**
+   * Remove FCM token from user
+   */
+  async removeFcmToken(userId: string, token: string): Promise<User> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new Error(`User ${userId} not found`);
+    }
+
+    const updatedTokens = user.fcmTokens.filter((t) => t !== token);
+
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        fcmTokens: updatedTokens,
+      },
+    });
+  }
+
+  /**
+   * Remove all FCM tokens for a user
+   */
+  async clearFcmTokens(userId: string): Promise<User> {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        fcmTokens: [],
+      },
+    });
+  }
+
+  /**
+   * Remove invalid FCM tokens from all users
+   */
+  async removeInvalidTokens(tokens: string[]): Promise<void> {
+    if (tokens.length === 0) return;
+
+    // Find users with these tokens
+    const users = await prisma.user.findMany({
+      where: {
+        fcmTokens: {
+          hasSome: tokens,
+        },
+      },
+      select: {
+        id: true,
+        fcmTokens: true,
+      },
+    });
+
+    // Update each user to remove invalid tokens
+    await Promise.all(
+      users.map((user) => {
+        const validTokens = user.fcmTokens.filter((t) => !tokens.includes(t));
+        return prisma.user.update({
+          where: { id: user.id },
+          data: { fcmTokens: validTokens },
+        });
+      })
+    );
+  }
 }
 
 export const userRepository = new UserRepository();
