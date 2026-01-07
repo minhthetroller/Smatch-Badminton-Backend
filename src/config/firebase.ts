@@ -45,10 +45,9 @@ export function initializeFirebase(): App {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
   if (!projectId || !clientEmail || !privateKey) {
-    // In test environment, don't throw error - return a stub
+    // In test environment, throw a specific error that will be caught by NotificationService
     if (process.env.NODE_ENV === 'test') {
       console.warn('⚠️  Firebase Admin SDK not configured in test environment. Firebase features will be disabled.');
-      // Don't throw, tests will mock Firebase services
       throw new Error('Firebase not configured in test environment');
     }
     throw new Error(

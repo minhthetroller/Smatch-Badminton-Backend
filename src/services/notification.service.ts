@@ -21,8 +21,9 @@ export class NotificationService {
   private isFirebaseConfigured = false;
 
   constructor() {
-    // Lazy initialization - only initialize when actually used
-    // This allows tests to run without Firebase credentials
+    // Eager initialization with error handling
+    // In test environment, Firebase initialization will fail gracefully
+    // allowing tests to run without Firebase credentials
     try {
       const app = initializeFirebase();
       this.messaging = getMessaging(app);
@@ -103,7 +104,10 @@ export class NotificationService {
     };
 
     try {
-      const response = await this.messaging!.sendEachForMulticast(message);
+      if (!this.messaging) {
+        throw new Error('Firebase messaging not initialized');
+      }
+      const response = await this.messaging.sendEachForMulticast(message);
       console.log(`✅ Sent ${response.successCount} notifications, ${response.failureCount} failed`);
 
       // Clean up invalid tokens
