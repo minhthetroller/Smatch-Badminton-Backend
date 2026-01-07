@@ -17,17 +17,44 @@ import type {
 } from '../types/notification.types.js';
 
 export class NotificationService {
-  private messaging;
+  private messaging: ReturnType<typeof getMessaging> | null = null;
+  private isFirebaseConfigured = false;
 
   constructor() {
-    const app = initializeFirebase();
-    this.messaging = getMessaging(app);
+    // Eager initialization with error handling
+    // In test environment, Firebase initialization will fail gracefully
+    // allowing tests to run without Firebase credentials
+    try {
+      const app = initializeFirebase();
+      this.messaging = getMessaging(app);
+      this.isFirebaseConfigured = true;
+    } catch (error) {
+      if (process.env.NODE_ENV === 'test') {
+        console.warn('⚠️  NotificationService: Firebase not configured, notifications will be skipped');
+        this.isFirebaseConfigured = false;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Check if Firebase is properly configured
+   */
+  private checkFirebaseConfigured(): boolean {
+    if (!this.isFirebaseConfigured || !this.messaging) {
+      console.warn('Firebase not configured, skipping notification');
+      return false;
+    }
+    return true;
   }
 
   /**
    * Send notification to a single user
    */
   async sendToUser(userId: string, payload: FcmNotificationPayload): Promise<void> {
+    if (!this.checkFirebaseConfigured()) return;
+
     const user = await userRepository.findById(userId);
     if (!user || !user.fcmTokens || user.fcmTokens.length === 0) {
       console.log(`No FCM tokens found for user ${userId}`);
@@ -41,6 +68,7 @@ export class NotificationService {
    * Send notification to multiple users
    */
   async sendToUsers(userIds: string[], payload: FcmNotificationPayload): Promise<void> {
+    if (!this.checkFirebaseConfigured()) return;
     await Promise.all(userIds.map((userId) => this.sendToUser(userId, payload)));
   }
 
@@ -48,6 +76,7 @@ export class NotificationService {
    * Send notification to specific FCM tokens
    */
   async sendToTokens(tokens: string[], payload: FcmNotificationPayload): Promise<void> {
+    if (!this.checkFirebaseConfigured()) return;
     if (tokens.length === 0) return;
 
     const message: MulticastMessage = {
@@ -75,6 +104,9 @@ export class NotificationService {
     };
 
     try {
+      if (!this.messaging) {
+        throw new Error('Firebase messaging not initialized');
+      }
       const response = await this.messaging.sendEachForMulticast(message);
       console.log(`✅ Sent ${response.successCount} notifications, ${response.failureCount} failed`);
 
